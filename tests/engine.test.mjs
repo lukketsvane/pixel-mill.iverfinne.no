@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {newPlayer,stepPlayer,landing,solid,platforms,screenToWorld,zoomAt,validateProject} from '../dist/engine.mjs';
+import {hsbToHex} from '../dist/color.mjs';
+import {editProject} from '../dist/agent.mjs';
 const floor={id:'floor',x:-200,y:0,w:400,h:20,solid:true};
 const step=(p,input,n,ps=[floor])=>{for(let i=0;i<n;i++)stepPlayer(p,input,ps);return p};
 test('Max stands, accelerates to original run speed, jumps and lands',()=>{
@@ -20,4 +22,12 @@ test('walls, ceilings, collision inset, and decorations',()=>{
 test('camera zoom keeps the touched world pixel anchored',()=>{const c={x:-50,y:8,z:3},point={x:70,y:155},before=screenToWorld(point,c);zoomAt(c,point,8);const after=screenToWorld(point,c);assert.ok(Math.abs(after.x-before.x)<1e-9);assert.ok(Math.abs(after.y-before.y)<1e-9)});
 test('project validation is atomic, rejects corrupt references and nonfinite positions',()=>{
  const valid={format:'max-level-studio',version:1,name:'Mine',spawn:{x:0,y:0},assets:[],objects:[{id:'a',asset:null,name:'Floor',x:0,y:0,w:40,h:4,inset:0,kind:'solid'}]};assert.equal(validateProject(valid).objects.length,1);assert.throws(()=>validateProject({...valid,spawn:{x:NaN,y:0}}));assert.throws(()=>validateProject({...valid,objects:[{...valid.objects[0],asset:'missing'}]}));assert.equal(valid.objects[0].asset,null);
+});
+test('block picker color survives level edits and project validation',()=>{
+ assert.equal(hsbToHex(0,100,100),'#ff0000');assert.equal(hsbToHex(120,100,100),'#00ff00');assert.equal(hsbToHex(240,100,100),'#0000ff');
+ const base={format:'max-level-studio',version:1,name:'Color',spawn:{x:0,y:0},assets:[],objects:[]};
+ const red=editProject(base,[{type:'block',id:'red',color:hsbToHex(0,100,100)}]);
+ assert.equal(red.objects[0].color,'#ff0000');assert.equal(editProject(red,[{type:'update',id:'red',changes:{color:'#123ABC'}}]).objects[0].color,'#123abc');
+ assert.throws(()=>editProject(red,[{type:'update',id:'red',changes:{color:'red'}}]),/Invalid block color/);
+ assert.equal(validateProject({...red,objects:[{...red.objects[0],color:undefined}]}).objects[0].color,undefined);
 });
