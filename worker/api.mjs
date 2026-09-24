@@ -1,3 +1,4 @@
+import {designWithAgent,reserveChat} from './chat.mjs';
 import {validateProject} from '../dist/engine.mjs';
 import {agentTools,editProject,projectInfo,projectDiff,applyDiff,simulate} from '../dist/agent.mjs';
 const MAX_BYTES=32*1024*1024,TTL=7*86400000;
@@ -23,12 +24,19 @@ async function executeTool(name,args,room,bucket,key,etag){
 }
 export async function agentFetch(request,env){
  const url=new URL(request.url),path=url.pathname,origin=request.headers.get('origin');if(origin&&origin!==url.origin&&origin!=='https://chatgpt.com')return response({error:'Origin not allowed'},403);
+ if(path==='/api/chat/status')return response({enabled:!!env.OPENAI_API_KEY});
  if(!env.BUCKET)return response({error:'Agent sharing is not configured on this host.'},503);
  try{
+  if(path==='/api/projects'&&request.method==='POST'){
+   const value=await body(request),project=validateProject(value.project),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),key='projects/'+await keyFor(token);
+   await saveRoom(env.BUCKET,key,{project,revision:0});return response({token,revision:0},201);
+  }
+  const projectMatch=path.match(/^\/api\/projects\/([a-f0-9]{64})$/);
+  if(projectMatch){const key='projects/'+await keyFor(projectMatch[1]),object=await env.BUCKET.get(key);if(!object)return response({error:'Project not found.'},404);const saved=await object.json();if(request.method==='GET')return response(saved);if(request.method!=='PUT')return response({error:'Method not allowed'},405);const value=await body(request);revisionCheck(saved,value.revision);const next={project:validateProject(value.project),revision:saved.revision+1};await saveRoom(env.BUCKET,key,next,object.etag);return response({revision:next.revision})}
   if(path==='/api/rooms'&&request.method==='POST'){
    const project=validateProject(await body(request)),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),key=await keyFor(token),room={project,revision:0,history:[],expires:Date.now()+TTL};await saveRoom(env.BUCKET,key,room);return response({token,...publicRoom(room)},201);
   }
-  const match=path.match(/^\/(api\/rooms|mcp)\/([a-f0-9]{64})(\/preview)?$/);if(!match)return response({error:'Not found'},404);
+  const match=path.match(/^\/(api\/rooms|mcp)\/([a-f0-9]{64})(\/(?:preview|chat))?$/);if(!match)return response({error:'Not found'},404);
   const [,route,token,preview]=match,key=await keyFor(token),object=await env.BUCKET.get(key);if(!object)return response({error:'Agent link is inactive.'},404);const room=await object.json();if(room.expires<Date.now()){await env.BUCKET.delete([key,key+'/preview']);return response({error:'Agent link expired. Create a new link in the editor.'},410)}
   if(route==='mcp'){
    if(request.method!=='POST')return response({error:'Use Streamable HTTP POST. Server-initiated SSE is not offered.'},405,{Allow:'POST'});
@@ -42,6 +50,20 @@ export async function agentFetch(request,env){
    else if(rpc.method==='tools/call'){try{result=await executeTool(rpc.params?.name,rpc.params?.arguments||{},room,env.BUCKET,key,object.etag)}catch(error){result=fail(error.message)}}
    else return response({jsonrpc:'2.0',id:rpc.id,error:{code:-32601,message:'Method not found'}});
    return response({jsonrpc:'2.0',id:rpc.id,result});
+  }
+  if(preview==='/chat'){
+   if(request.method==='GET')return response({messages:room.chat||[]});
+   if(request.method!=='POST')return response({error:'Method not allowed'},405);
+   if(!env.OPENAI_API_KEY)return response({error:'Chat is not connected yet. The site owner needs to connect OpenAI.'},503);
+   const value=await body(request);revisionCheck(room,value.revision);
+   if(typeof value.message!=='string'||!value.message.trim()||value.message.length>4000)throw Error('Write a message under 4,000 characters.');
+   if(room.lastChat&&Date.now()-room.lastChat<5000)throw Error('Wait a moment before sending again.');
+   await reserveChat(env.BUCKET,env);
+   const answer=await designWithAgent({project:room.project,message:value.message,history:room.chat,grid:value.grid,preview:value.preview},env);
+   // Conditional save rejects any human/agent edit made while GPT was thinking.
+   const changed=JSON.stringify(room.project)!==JSON.stringify(answer.project);if(changed)commitRoom(room,answer.project);else room.revision++;
+   room.chat=[...(room.chat||[]),{role:'user',content:value.message},{role:'assistant',content:answer.reply}].slice(-24);room.lastChat=Date.now();room.expires=Date.now()+TTL;
+   await saveRoom(env.BUCKET,key,room,object.etag);return response({reply:answer.reply,changed,room:publicRoom(room)});
   }
   if(preview){if(request.method!=='POST')return response({error:'Method not allowed'},405);const value=await body(request);if(!/^data:image\/png;base64,[A-Za-z0-9+/=]+$/.test(value.src)||value.src.length>3000000||!Number.isInteger(value.revision))throw Error('Invalid preview.');await env.BUCKET.put(key+'/preview',JSON.stringify({src:value.src,revision:value.revision,capturedAt:new Date().toISOString()}));return response({ok:true})}
   if(request.method==='GET'){if(url.searchParams.get('revision')===String(room.revision))return response(null,304);return response(publicRoom(room,(url.searchParams.get('assets')||'').split(',')))}

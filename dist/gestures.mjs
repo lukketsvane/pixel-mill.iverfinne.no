@@ -1,4 +1,4 @@
-import {clamp,rotate,radians,screenToWorld,worldToScreen,localToWorld,worldToLocal,contains,zoomAt,anchorCamera,resizeFromCorner,TwoFingerTransform} from './geometry.mjs';
+import {clamp,rotate,radians,screenToWorld,worldToScreen,localToWorld,worldToLocal,contains,zoomAt,anchorCamera,resizeFromCorner,snapObject,TwoFingerTransform} from './geometry.mjs';
 const snapped=(v,n)=>Math.round(v/n)*n;
 export function installGestures(canvas,api,pointers=new Map()){
  let gesture=null,longPress=null;const types=new Map();
@@ -51,7 +51,7 @@ export function installGestures(canvas,api,pointers=new Map()){
   if(g.type==='crop'){const a=g.start,b=g.end;api.crop?.({x:Math.min(a.x,b.x),y:Math.min(a.y,b.y),w:Math.abs(a.x-b.x),h:Math.abs(a.y-b.y)})}
   else if(g.type==='block'){const a=g.start,b=g.end;if(Math.hypot(a.x-b.x,a.y-b.y)*s.camera.z>5)api.addBlock(Math.min(a.x,b.x),Math.min(a.y,b.y),Math.abs(a.x-b.x),Math.abs(a.y-b.y))}
   else if(g.type==='stamp'){const p=point(e);if(Math.hypot(p.x-g.start.x,p.y-g.start.y)<15)api.place(g.world.x,g.world.y)}
-  else if(g.before){if(!g.multi&&g.type==='move'){g.object.x=snapped(g.object.x,s.grid);g.object.y=snapped(g.object.y,s.grid)}if(g.type==='spawn'){s.state.spawn.x=snapped(s.state.spawn.x,s.grid);s.state.spawn.y=snapped(s.state.spawn.y,s.grid)}if(JSON.stringify(g.before)!==JSON.stringify(api.snapshot()))api.commit(g.before)}
+  else if(g.before){if(g.object&&JSON.stringify(g.before)!==JSON.stringify(api.snapshot()))snapObject(g.object,s.grid,{dimensions:!!g.multi});if(g.type==='spawn'){s.state.spawn.x=snapped(s.state.spawn.x,s.grid);s.state.spawn.y=snapped(s.state.spawn.y,s.grid)}if(JSON.stringify(g.before)!==JSON.stringify(api.snapshot()))api.commit(g.before)}
   api.refresh();
  }
  canvas.addEventListener('pointerdown',down,{passive:false});canvas.addEventListener('pointermove',move,{passive:false});canvas.addEventListener('pointerup',up,{passive:false});

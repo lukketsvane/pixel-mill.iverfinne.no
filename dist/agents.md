@@ -6,7 +6,7 @@ The MCP connection exposes `get_level`, `get_asset_image`, `get_canvas_preview`,
 
 Start with `get_level`, inspect the asset IDs and latest canvas preview, then send a batch of `edit_level` operations with the returned revision. Each batch is one undo step. Stale revisions fail without changing the project. Human and agent edits to different pieces merge; conflicting changes to one piece preserve the local edit and report the conflict. Keep the editor open to see edits and provide current canvas previews.
 
-Coordinates are native game pixels, positive x right and positive y down. Objects use x/y of the unrotated rectangle, w/h, and rotation in degrees about the center. Max's spawn is his foot position. Base speeds are 48 walk and 88 run; full jump height is about 27 pixels. Collision types are `solid`, one-way `platform`, and non-colliding `decor`. `inset` moves the collision top down inside the piece.
+Coordinates are native game pixels, positive x right and positive y down. Objects use x/y of the unrotated rectangle, w/h, and rotation in degrees about the center, snapping to 5° when edited. Positions finish on the native pixel grid. Max's spawn is his foot position. Base speeds are 48 walk and 88 run; full jump height is about 27 pixels. Collision types are `solid`, one-way `platform`, and non-colliding `decor`. `inset` moves the collision top down inside the piece.
 
 Example `edit_level` arguments:
 

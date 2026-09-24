@@ -1,7 +1,7 @@
 import {validateProject,platforms,newPlayer,stepPlayer,MOVE} from './engine.mjs';
-import {cropObject,resetCrop} from './geometry.mjs';
+import {cropObject,resetCrop,snapObject} from './geometry.mjs';
 const clone=value=>structuredClone(value);
-const equal=(a,b)=>JSON.stringify(a)===JSON.stringify(b);
+const equal=(a,b)=>{if(a===b)return true;if(a===null||b===null||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>Object.hasOwn(b,k)&&equal(a[k],b[k]))};
 const finite=(v,fallback)=>v===undefined?fallback:typeof v==='number'&&Number.isFinite(v)?v:(()=>{throw Error('Expected a finite number.')})();
 export function editProject(project,operations){
  if(!Array.isArray(operations)||!operations.length||operations.length>100)throw Error('Supply 1–100 operations.');const next=clone(project);
@@ -16,6 +16,7 @@ export function editProject(project,operations){
   else if(op.type==='rename'){if(typeof op.name!=='string')throw Error('Name must be text.');next.name=op.name}
   else throw Error('Unknown operation: '+op.type);
  }
+ const previous=new Map(project.objects.map(o=>[o.id,JSON.stringify(o)]));for(const o of next.objects)if(previous.get(o.id)!==JSON.stringify(o))snapObject(o,1);
  return validateProject(next);
 }
 export function projectInfo(project){return{...project,assets:project.assets.map(({src,...a})=>a),coordinates:'Native pixels; x right, y down; rotation in degrees about each piece center; spawn is Max’s foot point.',movement:MOVE}}
