@@ -132,6 +132,7 @@ async function beginProject(project){cancelGesture();numberScrub?.cancel();if(pl
 $('#projects-button').onclick=async()=>{if(importing){message('Finish importing first.');return}const list=$('#saved-projects');list.replaceChildren();try{for(const p of await autosave?.list()||[]){const button=document.createElement('button');button.textContent=p.project.name||'Untitled';button.onclick=async()=>{try{cancelGesture();numberScrub?.cancel();if(playing)togglePlay();await leaveShared();await autosave.load(p.id);history=[];future=[];localRevision++;fit();$('#projects-dialog').close()}catch(error){message(error.message)}};list.append(button)}}catch(error){message(error.message)}$('#project').hidden=true;$('#projects-dialog').showModal()};
 $('#close-projects').onclick=()=>$('#projects-dialog').close();
 installChat({
+ connectChatGPT:openAgent,
  history:async()=>shared.connected?(await shared.request('/api/rooms/'+shared.token+'/chat')).messages:[],
  send:async message=>{
   if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');
@@ -142,9 +143,10 @@ installChat({
   await shared.accept(reply.room);return reply;
  }
 });
-function showAgent(){const connected=!!shared.token;$('#agent-connected').hidden=!connected;$('#agent-connect').hidden=shared.connected;$('#agent-url').value=connected?shared.url():''}
-$('#agent-button').onclick=()=>{$('#project').hidden=true;showAgent();$('#agent-dialog').showModal()};$('#close-agent').onclick=()=>$('#agent-dialog').close();
-$('#agent-connect').onclick=async()=>{const button=$('#agent-connect');button.disabled=true;try{await shared.connect();window.history.replaceState(null,'','#room='+shared.token);showAgent();message('Agent connection ready')}catch(error){message(error.message,6000)}finally{button.disabled=false}};
+function showAgent(){const connected=shared.connected;$('#agent-connected').hidden=!connected;$('#agent-connect').hidden=connected;$('#agent-url').value=connected?shared.url():''}
+function openAgent(){$('#project').hidden=true;showAgent();$('#agent-dialog').showModal()}
+$('#agent-button').onclick=openAgent;$('#close-agent').onclick=()=>$('#agent-dialog').close();
+$('#agent-connect').onclick=async()=>{const button=$('#agent-connect');button.disabled=true;try{if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');if(!shared.connected)await shared.connect();window.history.replaceState(null,'','#room='+shared.token);showAgent();message('Link ready. Add it in ChatGPT.')}catch(error){message(error.message,6000)}finally{button.disabled=false}};
 async function copyAgentText(text){try{await navigator.clipboard.writeText(text);message('Copied')}catch{$('#agent-url').value=text;$('#agent-url').focus();$('#agent-url').select();message('Select and copy the link')}}
 $('#copy-agent').onclick=()=>copyAgentText(shared.url());$('#copy-room').onclick=()=>copyAgentText(location.origin+'/#room='+shared.token);
 $('#agent-disconnect').onclick=async()=>{try{await shared.disconnect();window.history.replaceState(null,'',location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};

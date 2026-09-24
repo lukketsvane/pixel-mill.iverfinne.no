@@ -1,6 +1,8 @@
 # Pixel Mill agent connection
 
-Open Project → Agent → Connect, then Copy MCP URL. Add that private URL to a client that supports MCP Streamable HTTP. No additional API key is needed: the unguessable link authorizes access to this level. Disconnect revokes the link. Idle links expire after seven days; active edits renew them.
+Open Chat → Create link, then Copy MCP URL (or Project → Agent). In ChatGPT, enable Developer mode under Settings → Security and login, add a personal plugin using the URL and authentication None, then select it in a Work chat. [Setup](https://developers.openai.com/plugins/deploy/connect-chatgpt). Availability depends on account and workspace policy. The conversation and login happen in ChatGPT; the editor receives tool edits, without an OpenAI API key.
+
+ Add that private URL to a client that supports MCP Streamable HTTP. No additional API key is needed: the unguessable link authorizes access to this level. Disconnect revokes the link. Idle links expire after seven days; active edits renew them.
 
 The MCP connection exposes `get_level`, `get_asset_image`, `get_canvas_preview`, `edit_level`, `undo_level`, `simulate_player`, and `set_play_mode`. In browsers supporting WebMCP, the same tools are registered automatically on the page.
 

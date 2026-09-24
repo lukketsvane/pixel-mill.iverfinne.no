@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import {agentFetch} from '../worker/api.mjs';
 const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScLbtAAAAABJRU5ErkJggg==';
 const downloads=[],blobStore=new Map();let frame;
 class Element{
@@ -43,4 +44,22 @@ test('complete editor flow: empty canvas, multi-upload, placement, physics mode,
  assert.equal(ids.has('touch-controls'),false);c.listeners.pointerdown(event(50,600));c.listeners.pointermove(event(110,600));windowListeners.blur();
  await tools.get('set_play_mode').execute({playing:false});
  assert.equal(ids.get('canvas').width,1170);assert.equal(ids.get('canvas').height,2532);
+});
+
+test('ChatGPT handoff works without an API key and MCP edits reach the live editor',async()=>{
+ const entries=new Map();let version=0;const env={BUCKET:{async get(key){const o=entries.get(key);return o?{etag:o.etag,json:async()=>JSON.parse(o.text)}:null},async put(key,text,options={}){const current=entries.get(key),condition=options.onlyIf;if(condition?.etagMatches&&current?.etag!==condition.etagMatches||condition?.etagDoesNotMatch==='*'&&current)return null;const etag=String(++version);entries.set(key,{text,etag});return{etag}},async delete(keys){for(const key of Array.isArray(keys)?keys:[keys])entries.delete(key)}}};
+ const previousFetch=globalThis.fetch,requests=[];
+ globalThis.location={origin:'https://pixel.example',pathname:'/',hash:''};window.history={replaceState(a,b,url){location.hash=url.startsWith('#')?url:''}};
+ globalThis.fetch=async(path,options={})=>{requests.push(String(path));return agentFetch(new Request(new URL(path,location.origin),options),env)};
+ try{
+  await ids.get('chat-button').onclick();assert.equal(ids.get('agent-dialog').open,true);assert.equal(ids.get('chat-panel').hidden,true);assert.equal(ids.get('agent-connect').hidden,false);
+  await ids.get('agent-connect').onclick();assert.equal(ids.get('agent-connect').hidden,true);assert.equal(ids.get('agent-connected').hidden,false);
+  const url=ids.get('agent-url').value;assert.match(url,/^https:\/\/pixel\.example\/mcp\/[a-f0-9]{64}$/);assert.match(location.hash,/^#room=/);
+  ids.get('close-agent').onclick();await ids.get('chat-button').onclick();assert.equal(ids.get('agent-url').value,url);assert.equal(ids.get('agent-dialog').open,true);
+  const rpc=async(name,args={})=>(await (await fetch(url,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})})).json()).result;
+  const info=await rpc('get_level');const edited=await rpc('edit_level',{revision:info.structuredContent.revision,operations:[{type:'rename',name:'Designed in ChatGPT'}]});assert.equal(edited.isError,undefined);
+  let synced=false;for(let i=0;i<50;i++){await new Promise(r=>timeout(r,50));ids.get('save').onclick();const project=JSON.parse(await downloads.at(-1).blob.text());if(project.name==='Designed in ChatGPT'){synced=true;break}}
+  assert.equal(synced,true);assert.equal(requests.some(url=>url.includes('/responses')||url.endsWith('/chat')),false);
+  await ids.get('agent-disconnect').onclick();assert.equal(ids.get('agent-connected').hidden,true);assert.equal((await fetch(url,{method:'POST',body:'{}'})).status,404);
+ }finally{globalThis.fetch=previousFetch;delete globalThis.location;delete window.history}
 });
