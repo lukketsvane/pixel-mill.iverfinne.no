@@ -28,6 +28,7 @@ test('painted collision remains solid while asset adjustments survive save and a
  const result=editProject(base,[{type:'stroke',id:'paint',points:[{x:0,y:10},{x:40,y:10}],width:6},{type:'update',id:'piece',changes:{adjust:{hue:45,saturation:20,brightness:10,black:5,white:240}}}]);
  assert.equal(result.objects[1].collisionOnly,true);assert.equal(result.objects[0].adjust.hue,45);const collision=platforms(result.objects);assert.ok(collision.some(p=>p.solid&&p.x<=20&&p.x+p.w>=20&&p.y<=10&&p.y+p.h>=10));assert.equal(validateProject(result).objects[1].points.length,2);
  assert.throws(()=>validateProject({...result,objects:[{...result.objects[1],points:[{x:NaN,y:1}]}]}));
+ const block=editProject({format:'max-level-studio',version:1,name:'Blocks',spawn:{x:0,y:0},assets:[],objects:[{id:'b',asset:null,name:'Stone',x:0,y:0,w:8,h:8,kind:'solid',inset:0,color:'#445566'}]},[{type:'update',id:'b',changes:{adjust:{hue:90,saturation:-20,brightness:5,black:0,white:255}}}]);assert.equal(block.objects[0].adjust.hue,90);
 });
 test('block picker color survives level edits and project validation',()=>{
  assert.equal(hsbToHex(0,100,100),'#ff0000');assert.equal(hsbToHex(120,100,100),'#00ff00');assert.equal(hsbToHex(240,100,100),'#0000ff');
