@@ -1,6 +1,6 @@
 import {designWithAgent,reserveChat} from './chat.mjs';
 import {validateProject} from '../dist/engine.mjs';
-import {agentTools,editProject,projectInfo,projectDiff,applyDiff,simulate} from '../dist/agent.mjs';
+import {agentTools,editProject,projectInfo,projectDiff,applyDiff,simulate,imageProject} from '../dist/agent.mjs';
 const MAX_BYTES=32*1024*1024,TTL=7*86400000;
 const response=(value,status=200,headers={})=>new Response(value===null?null:JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Referrer-Policy':'no-referrer',...headers}});
 const toolResult=value=>({content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value});
@@ -16,6 +16,13 @@ async function executeTool(name,args,room,bucket,key,etag){
  if(name==='get_asset_image'){const a=room.project.assets.find(a=>a.id===args.id);if(!a)throw Error('Unknown asset.');return{content:[{type:'text',text:JSON.stringify({id:a.id,name:a.name,width:a.w,height:a.h})},{type:'image',mimeType:'image/png',data:a.src.split(',')[1]}]}}
  if(name==='simulate_player')return toolResult(simulate(room.project,args.route));
  if(name==='get_canvas_preview'){const object=await bucket.get(key+'/preview');if(!object)throw Error('No preview yet. Open the connected editor.');const preview=await object.json();return{content:[{type:'text',text:JSON.stringify({revision:preview.revision,currentRevision:room.revision,capturedAt:preview.capturedAt})},{type:'image',mimeType:'image/png',data:preview.src.split(',')[1]}]}}
+ if(['import_image','slice_spritesheet','create_spritesheet'].includes(name)){
+  revisionCheck(room,args.revision);
+  const edited=await imageProject(room.project,name,args);commitRoom(room,edited.project);
+  await saveRoom(bucket,key,room,etag);
+  const info={revision:room.revision,...edited.details};
+  return{content:[{type:'text',text:JSON.stringify(info)},...(edited.image?[edited.image]:[])],structuredContent:info};
+ }
  if(name==='edit_level'){revisionCheck(room,args.revision);commitRoom(room,editProject(room.project,args.operations))}
  else if(name==='undo_level'){revisionCheck(room,args.revision);if(!room.history.length)throw Error('Nothing to undo.');room.project=applyDiff(room.project,room.history.pop());room.revision++}
  else if(name==='set_play_mode'){if(typeof args.playing!=='boolean')throw Error('playing must be boolean.');room.control={id:crypto.randomUUID(),playing:args.playing};room.revision++}
@@ -44,7 +51,7 @@ export async function agentFetch(request,env){
    let rpc;try{rpc=await body(request)}catch{return response({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Parse error'}},400)}
    if(!rpc||Array.isArray(rpc)||rpc.jsonrpc!=='2.0'||typeof rpc.method!=='string')return response({jsonrpc:'2.0',id:rpc?.id??null,error:{code:-32600,message:'Invalid Request'}},400);
    if(rpc.id===undefined)return response(null,202);
-   let result;if(rpc.method==='initialize')result={protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(rpc.params?.protocolVersion)?rpc.params.protocolVersion:'2025-06-18',capabilities:{tools:{listChanged:false}},serverInfo:{name:'pixel-mill',version:'1.1.0'},instructions:'Co-design the connected level. Read get_level and inspect assets/preview first. Coordinates are native pixels; Max jump height is about 27 pixels. Use edit_level in small batches with the current revision. The user sees edits and can undo them. This private URL grants access only to this level.'};
+   let result;if(rpc.method==='initialize')result={protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(rpc.params?.protocolVersion)?rpc.params.protocolVersion:'2025-06-18',capabilities:{tools:{listChanged:false}},serverInfo:{name:'pixel-mill',version:'1.2.0'},instructions:'Co-design the connected level. Read get_level and inspect assets/preview first. Coordinates are native pixels; Max jump height is about 27 pixels. Use current revision for edits and image actions. import_image uploads PNG bytes; slice_spritesheet and create_spritesheet use exact grid cells. The user sees edits and can undo them. This private URL grants access only to this level.'};
    else if(rpc.method==='ping')result={};
    else if(rpc.method==='tools/list')result={tools:agentTools};
    else if(rpc.method==='tools/call'){try{result=await executeTool(rpc.params?.name,rpc.params?.arguments||{},room,env.BUCKET,key,object.etag)}catch(error){result=fail(error.message)}}

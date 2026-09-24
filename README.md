@@ -25,7 +25,7 @@ The Chat button offers a ChatGPT connection when no API key is configured. Creat
 When the site has its own API key, the Chat button also supports a small in-editor conversation. GPT can inspect uploaded assets, edit a draft with the existing level tools, and test jumps. Successful changes commit atomically as one undo step; concurrent edits cancel the draft instead of overwriting user work. Chat needs the server secret `OPENAI_API_KEY`; without it the interface clearly reports that chat is not connected. `OPENAI_MODEL` defaults to `gpt-6-sol`. `CHAT_DAILY_LIMIT` defaults to 50 chat requests per day for this site. No provider keys reach the browser or repository.
 
 
-Project → Agent → Connect → Copy MCP URL. Add that URL to an MCP Streamable HTTP client. A link authorizes one shared level, persists its project on the host, and lets human and agent edits share undo history. Disconnect revokes it. Idle links expire after seven days. Keep the editor open for previews and live co-design. [Agent API details](dist/agents.md).
+Project → Agent → Connect → Copy MCP URL. Add that URL to an MCP Streamable HTTP client. A link authorizes one shared level, persists its project on the host, and lets human and agent edits share undo history. Disconnect revokes it. Idle links expire after seven days. Keep the editor open for previews and live co-design. MCP tools can upload PNGs, remove backgrounds, split imported sheets into exact cells, and compose transparent spritesheets from assets. [Agent API details](dist/agents.md).
 
 Browsers with WebMCP support also expose the same tools directly, without requiring a remote room. Other browsers use the remote MCP endpoint.
 

@@ -1,5 +1,7 @@
 import {validateProject,platforms,newPlayer,stepPlayer,MOVE} from './engine.mjs';
 import {cropObject,resetCrop,snapObject} from './geometry.mjs';
+import {pngBytes,pngHeader,decodePNG,encodePNG,dataURL} from './png.mjs';
+import {detectBackground,processPixels,extractPart} from './pixel-core.mjs';
 const clone=value=>structuredClone(value);
 const equal=(a,b)=>{if(a===b)return true;if(a===null||b===null||typeof a!=='object'||typeof b!=='object'||Array.isArray(a)!==Array.isArray(b))return false;const keys=Object.keys(a);return keys.length===Object.keys(b).length&&keys.every(k=>Object.hasOwn(b,k)&&equal(a[k],b[k]))};
 const finite=(v,fallback)=>v===undefined?fallback:typeof v==='number'&&Number.isFinite(v)?v:(()=>{throw Error('Expected a finite number.')})();
@@ -20,6 +22,56 @@ export function editProject(project,operations){
  return validateProject(next);
 }
 export function projectInfo(project){return{...project,assets:project.assets.map(({src,...a})=>a),coordinates:'Native pixels; x right, y down; rotation in degrees about each piece center; spawn is Max’s foot point.',movement:MOVE}}
+const count=(value,max,label)=>{if(!Number.isInteger(value)||value<1||value>max)throw Error(label+' must be an integer from 1 to '+max+'.');return value};
+const assetName=value=>String(value||'Image').trim().slice(0,80)||'Image';
+export async function imageProject(project,name,args){
+ const next=clone(project);let image=null,details=null;
+ if(name==='import_image'){
+  const bytes=pngBytes(args.dataUrl),{w,h}=pngHeader(bytes);
+  // Decode before saving, so a corrupt PNG cannot poison the project.
+  const decoded=await decodePNG(bytes),ids=[];
+  if(args.removeBackground||args.split||args.scale!==undefined||args.palette){
+   const scale=args.scale??1;if(typeof scale!=='number'||!Number.isFinite(scale)||scale<.05||scale>16)throw Error('Scale must be between 0.05 and 16.');
+   const color=args.backgroundColor??detectBackground(decoded.pixels,w,h);
+   if(!Array.isArray(color)||color.length!==3||color.some(n=>!Number.isInteger(n)||n<0||n>255))throw Error('Background color must be three RGB bytes.');
+   const processed=processPixels({data:decoded.pixels,width:w,height:h,options:{width:Math.max(1,Math.round(w*scale)),height:Math.max(1,Math.round(h*scale)),color,tolerance:args.tolerance??15,mode:'all',remove:!!args.removeBackground,palette:args.palette??0,minArea:args.minArea??1,connectivity:8,bridge:0}});
+   let parts=processed.parts;
+   if(!args.split&&parts.length){const x=Math.min(...parts.map(p=>p.x)),y=Math.min(...parts.map(p=>p.y));parts=[{x,y,w:Math.max(...parts.map(p=>p.x+p.w))-x,h:Math.max(...parts.map(p=>p.y+p.h))-y,labels:parts.flatMap(p=>p.labels)}]}
+   if(parts.length>512)throw Error('Import at most 512 separate pieces at once.');
+   for(const [n,part] of parts.entries()){const tile=extractPart(processed,part),id=crypto.randomUUID();ids.push(id);next.assets.push({id,name:assetName(args.name)+'-'+String(n+1).padStart(3,'0'),w:tile.width,h:tile.height,src:dataURL(await encodePNG({w:tile.width,h:tile.height,pixels:tile.data}))})}
+  }else{const id=crypto.randomUUID();ids.push(id);next.assets.push({id,name:assetName(args.name),w,h,src:dataURL(bytes)})}
+  details={assetIds:ids,width:w,height:h};
+ }else if(name==='slice_spritesheet'){
+  const asset=next.assets.find(a=>a.id===args.assetId);if(!asset)throw Error('Unknown source asset.');
+  const cols=count(args.columns,64,'columns'),rows=count(args.rows,64,'rows');
+  if(asset.w%cols||asset.h%rows)throw Error('Every frame must occupy an exact equal-sized cell.');
+  const cellW=asset.w/cols,cellH=asset.h/rows,{pixels}=await decodePNG(pngBytes(asset.src)),ids=[];
+  if(cols*rows>512)throw Error('Split at most 512 cells at once.');
+  for(let y=0;y<rows;y++)for(let x=0;x<cols;x++){
+   const tile=new Uint8Array(cellW*cellH*4);
+   for(let row=0;row<cellH;row++)tile.set(pixels.subarray(((y*cellH+row)*asset.w+x*cellW)*4,((y*cellH+row)*asset.w+x*cellW+cellW)*4),row*cellW*4);
+   const id=crypto.randomUUID();ids.push(id);next.assets.push({id,name:assetName(args.name||asset.name)+'-'+String(y*cols+x).padStart(3,'0'),w:cellW,h:cellH,src:dataURL(await encodePNG({w:cellW,h:cellH,pixels:tile}))});
+  }
+  details={assetIds:ids,columns:cols,rows,cellWidth:cellW,cellHeight:cellH};
+ }else if(name==='create_spritesheet'){
+  const ids=args.assetIds;if(!Array.isArray(ids)||!ids.length||ids.length>512||new Set(ids).size!==ids.length)throw Error('Supply 1–512 distinct asset IDs in frame order.');
+  const columns=count(args.columns,64,'columns'),cellW=count(args.cellWidth,4096,'cellWidth'),cellH=count(args.cellHeight,4096,'cellHeight'),rows=Math.ceil(ids.length/columns),w=columns*cellW,h=rows*cellH;
+  if(w>4096||h>4096||w*h>4_000_000)throw Error('Spritesheet exceeds 4096 px or four million pixels.');
+  const pixels=new Uint8Array(w*h*4);
+  for(const [n,id] of ids.entries()){
+   const asset=next.assets.find(a=>a.id===id);if(!asset)throw Error('Unknown asset: '+id);
+   if(asset.w>cellW||asset.h>cellH)throw Error(asset.name+' does not fit its cell without scaling.');
+   const frame=(await decodePNG(pngBytes(asset.src))).pixels,x=(n%columns)*cellW+Math.floor((cellW-asset.w)/2),y=Math.floor(n/columns)*cellH+cellH-asset.h;
+   for(let row=0;row<asset.h;row++)pixels.set(frame.subarray(row*asset.w*4,(row+1)*asset.w*4),((y+row)*w+x)*4);
+  }
+  const src=dataURL(await encodePNG({w,h,pixels})),id=crypto.randomUUID();
+  next.assets.push({id,name:assetName(args.name||'Spritesheet'),w,h,src});
+  image={type:'image',mimeType:'image/png',data:src.split(',')[1]};
+  details={assetIds:[id],columns,rows,cellWidth:cellW,cellHeight:cellH,width:w,height:h,frames:ids.length};
+ }else throw Error('Unknown image action.');
+ if(next.assets.length>2000)throw Error('The asset palette is full.');
+ return{project:validateProject(next),details,image};
+}
 export function projectDiff(before,after){const diff={};for(const k of ['name','spawn'])if(!equal(before[k],after[k]))diff[k]={before:before[k],after:after[k]};for(const k of ['assets','objects']){const a=new Map(before[k].map(o=>[o.id,o])),b=new Map(after[k].map(o=>[o.id,o]));diff[k]=[...new Set([...a.keys(),...b.keys()])].filter(id=>!equal(a.get(id),b.get(id))).map(id=>({id,before:a.get(id)||null,after:b.get(id)||null}))}const a=before.objects.map(o=>o.id),b=after.objects.map(o=>o.id);if(!equal(a,b))diff.objectOrder={before:a,after:b};return diff}
 export function applyDiff(project,diff){if(!diff||typeof diff!=='object'||Object.keys(diff).some(k=>!['name','spawn','assets','objects','objectOrder'].includes(k)))throw Error('Invalid edit patch.');const next=clone(project);
  if(diff.objectOrder){const order=diff.objectOrder;if(![order.before,order.after].every(a=>Array.isArray(a)&&a.every(id=>typeof id==='string')&&new Set(a).size===a.length))throw Error('Invalid layer order.');const ids=next.objects.map(o=>o.id),common=order.before.filter(id=>ids.includes(id));if(!equal(common,ids.filter(id=>common.includes(id))))throw Error('Conflict: layer order changed. Refresh before editing.')}
@@ -32,6 +84,9 @@ export function simulate(project,route){if(!Array.isArray(route)||route.length>6
 const empty={type:'object',properties:{},additionalProperties:false};
 export const agentTools=[
  {name:'get_level',description:'Read the current level, revision, imported asset IDs, native-pixel coordinates and Max movement constants.',inputSchema:empty,annotations:{readOnlyHint:true,untrustedContentHint:true}},
+ {name:'import_image',description:'Upload a PNG data URL into the shared asset tray. Optionally remove a background color, nearest-neighbor scale, quantize colors and split disconnected pieces. Accepted PNGs are 8-bit, non-interlaced and at most four million pixels.',inputSchema:{type:'object',properties:{revision:{type:'integer',minimum:0},name:{type:'string'},dataUrl:{type:'string',description:'Full data:image/png;base64,... URL of the image.'},removeBackground:{type:'boolean'},backgroundColor:{type:'array',items:{type:'integer',minimum:0,maximum:255},minItems:3,maxItems:3},tolerance:{type:'number',minimum:0,maximum:100},scale:{type:'number',minimum:0.05,maximum:16},split:{type:'boolean'},minArea:{type:'integer',minimum:1,maximum:1000},palette:{type:'integer',minimum:0,maximum:256}},required:['revision','name','dataUrl'],additionalProperties:false},annotations:{readOnlyHint:false}},
+ {name:'slice_spritesheet',description:'Cut an imported spritesheet into mathematically exact equal-sized PNG frames in row-major order. No scaling or guessed boundaries.',inputSchema:{type:'object',properties:{revision:{type:'integer',minimum:0},assetId:{type:'string'},columns:{type:'integer',minimum:1,maximum:64},rows:{type:'integer',minimum:1,maximum:64},name:{type:'string'}},required:['revision','assetId','columns','rows'],additionalProperties:false},annotations:{readOnlyHint:false}},
+ {name:'create_spritesheet',description:'Combine existing PNG asset IDs into an exact transparent grid. Frame order is row-major, centered horizontally and bottom-aligned. Adds the PNG to assets and returns its image.',inputSchema:{type:'object',properties:{revision:{type:'integer',minimum:0},assetIds:{type:'array',minItems:1,maxItems:512,items:{type:'string'}},columns:{type:'integer',minimum:1,maximum:64},cellWidth:{type:'integer',minimum:1,maximum:4096},cellHeight:{type:'integer',minimum:1,maximum:4096},name:{type:'string'}},required:['revision','assetIds','columns','cellWidth','cellHeight'],additionalProperties:false},annotations:{readOnlyHint:false}},
  {name:'edit_level',description:'Atomically place, move, rotate, scale, crop, lock, reorder, change opacity, duplicate or delete pieces; set spawn or rename. Read get_level first and supply its revision. One batch is one undo step.',inputSchema:{type:'object',properties:{revision:{type:'integer',minimum:0},operations:{type:'array',minItems:1,maxItems:100,items:{type:'object',properties:{type:{enum:['block','place','update','duplicate','delete','spawn','rename','crop','order']},id:{type:'string'},assetId:{type:'string'},x:{type:'number'},y:{type:'number'},width:{type:'number'},height:{type:'number'},rotation:{type:'number'},kind:{enum:['solid','platform','decor']},name:{type:'string'},dx:{type:'number'},dy:{type:'number'},ids:{type:'array',items:{type:'string'}},direction:{enum:['front','back','forward','backward']},reset:{type:'boolean'},rect:{type:'object',description:'Crop in local displayed pixels',properties:{x:{type:'number'},y:{type:'number'},w:{type:'number',minimum:1},h:{type:'number',minimum:1}},required:['x','y','w','h'],additionalProperties:false},changes:{type:'object',description:'x,y,w,h,rotation,kind,inset,flip,name,locked,opacity (0–1)'}},required:['type'],additionalProperties:false}}},required:['revision','operations'],additionalProperties:false},annotations:{readOnlyHint:false,destructiveHint:false}},
  {name:'undo_level',description:'Undo the latest shared human or agent edit. Supply the current revision.',inputSchema:{type:'object',properties:{revision:{type:'integer',minimum:0}},required:['revision'],additionalProperties:false},annotations:{readOnlyHint:false}},
  {name:'get_asset_image',description:'Inspect a PNG asset before placing it.',inputSchema:{type:'object',properties:{id:{type:'string'}},required:['id'],additionalProperties:false},annotations:{readOnlyHint:true,untrustedContentHint:true}},

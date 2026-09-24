@@ -1,6 +1,6 @@
 import {clamp,snap,screenToWorld,zoomAt,bounds,platforms,newPlayer,stepPlayer} from './engine.mjs';
 import {applyObjectTransform,localToWorld,objectBounds,pointBounds,anchorCamera,drawObject,resizeFromCorner,cropObject,resetCrop,snapObject} from './geometry.mjs';
-import {agentTools,editProject,projectInfo,simulate} from './agent.mjs';
+import {agentTools,editProject,projectInfo,simulate,imageProject} from './agent.mjs';
 import {SharedLevel} from './shared.mjs';
 import {installPlayInput} from './play-input.mjs';
 import {paintPixelLayer} from './pixel-view.mjs';
@@ -151,9 +151,10 @@ async function copyAgentText(text){try{await navigator.clipboard.writeText(text)
 $('#copy-agent').onclick=()=>copyAgentText(shared.url());$('#copy-room').onclick=()=>copyAgentText(location.origin+'/#room='+shared.token);
 $('#agent-disconnect').onclick=async()=>{try{await shared.disconnect();window.history.replaceState(null,'',location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};
 async function executeAgent(name,args={}){
- if((gesture||numberScrub?.active()||importing)&&['edit_level','undo_level','set_play_mode'].includes(name))throw Error('The user is editing. Retry when the gesture or import finishes.');
+ if((gesture||numberScrub?.active()||importing)&&['edit_level','undo_level','set_play_mode','import_image','slice_spritesheet','create_spritesheet'].includes(name))throw Error('The user is editing. Retry when the gesture or import finishes.');
  if(shared.connected)return shared.tool(name,args);
  if(name==='get_level')return{revision:localRevision,...projectInfo(snapshot(state)),camera:{...camera},selected,playing,importing};
+ if(['import_image','slice_spritesheet','create_spritesheet'].includes(name)){if(args.revision!==localRevision)throw Error('Read the current revision first.');const edited=await imageProject(snapshot(state),name,args);checkpoint();await applyAgentProject(edited.project);return{revision:localRevision,...edited.details,content:edited.image?[edited.image]:[]}}
  if(name==='edit_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');const next=editProject(snapshot(state),args.operations);checkpoint();await applyAgentProject(next);return executeAgent('get_level')}
  if(name==='undo_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');if(!history.length)throw Error('Nothing to undo.');await undo();return executeAgent('get_level')}
  if(name==='get_asset_image'){const a=state.assets.find(a=>a.id===args.id);if(!a)throw Error('Unknown asset.');return{content:[{type:'image',mimeType:'image/png',data:a.src.split(',')[1]}]}}
