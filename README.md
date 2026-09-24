@@ -41,7 +41,7 @@ python3 -m http.server 8000 --directory dist
 
 The static server supports editing and local WebMCP. Autosave cloud storage and chat need the Worker backend. Remote MCP needs the included Worker, not just static hosting: build produces `dist/server/index.js`, which serves the frontend and `/api/rooms/*` / `/mcp/*` routes. Bind a Cloudflare R2 bucket as `BUCKET`. Rooms use conditional writes, revision checks and per-piece conflict detection. No credentials are bundled.
 
-The Vercel configuration, when included in the GitHub checkout, serves the static editor. Remote MCP on a Vercel-hosted frontend requires its API routes to be connected to the Worker backend. Publishing this repository does not itself configure a Vercel project or domain.
+On Vercel, the same-origin `/api/*` and `/mcp/*` routes run in `api/handler.js`, with private Vercel Blob storage for rooms, previews and project saves. Create a **private** Blob store in the Vercel project and connect it to Production (and Preview if needed); Vercel supplies `BLOB_READ_WRITE_TOKEN`, or an OIDC token and `BLOB_STORE_ID`. Redeploy after connecting the store. The project returns HTTP 503 until storage is configured. Do not put the Blob token in the browser or GitHub. The GitHub repository and custom domain are configured in the Vercel project, separately from this code.
 
 ## Max reference and verification
 
