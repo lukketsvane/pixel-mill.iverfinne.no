@@ -1,0 +1,13 @@
+{
+  "name": "pixel-mill",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "build": "node scripts/build.mjs && node --check dist/server/index.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
