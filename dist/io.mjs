@@ -1,3 +1,4 @@
+import {requireProjectName} from './project-state.mjs';
 import {detectBackground,extractPart,processPixels,safeName,zipStore} from './pixel-core.mjs';
 import {drawObject} from './geometry.mjs';
 import {exportSpriteSheet,autoGroupSpriteSheet} from './spritesheets.mjs';
@@ -32,9 +33,9 @@ export async function importImages(files,options,onProgress=()=>{}){
 }
 export function snapshot(state){return structuredClone({format:'max-level-studio',version:1,name:state.name,spawn:state.spawn,objects:state.objects,assets:state.assets,...(state.artRequests?{artRequests:state.artRequests}:{}),...(state.assetRequests?{assetRequests:state.assetRequests}:{})})}
 export function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}
-export function saveProject(state){download(new Blob([JSON.stringify(snapshot(state))],{type:'application/json'}),safeName(state.name,'level')+'.json')}
+export function saveProject(state){requireProjectName(state);download(new Blob([JSON.stringify(snapshot(state))],{type:'application/json'}),safeName(state.name,'level')+'.json')}
 export async function readProject(file){if(!file||file.size>100*1024*1024)throw Error('Choose a project under 100 MB.');const project=validateProject(JSON.parse(await file.text()));await Promise.all(project.assets.filter(a=>a.src).map(a=>decode(a.src)));return project}
-export async function exportProject(state,images){
+export async function exportProject(state,images){requireProjectName(state);
  const project=snapshot(state),entries=[{name:'level.json',data:JSON.stringify(project)}],enc=new TextEncoder();
  for(const [i,a] of state.assets.entries()){const src=a.src||(await exportSpriteSheet(a,{},state.assets)).src,bytes=Uint8Array.from(atob(src.split(',')[1]),c=>c.charCodeAt(0));entries.push({name:`assets/${String(i+1).padStart(3,'0')}-${safeName(a.name)}.png`,data:bytes})}
  const b=bounds(state.objects,state.spawn),w=Math.ceil(b.w),h=Math.ceil(b.h);if(w*h>16000000||w>16384||h>16384)throw Error('Level is too large for a PNG. Use Save for the editable project.');

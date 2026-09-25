@@ -4,7 +4,18 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "rewrites": [
-    {"source": "/api/:path*", "destination": "/api/handler"},
-    {"source": "/mcp/:path*", "destination": "/api/handler"}
-  ]
+    {
+      "source": "/api/:path*",
+      "destination": "/api/handler"
+    },
+    {
+      "source": "/mcp/:path*",
+      "destination": "/api/handler"
+    }
+  ],
+  "functions": {
+    "api/handler.js": {
+      "maxDuration": 60
+    }
+  }
 }

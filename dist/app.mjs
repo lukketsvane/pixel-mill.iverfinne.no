@@ -5,11 +5,13 @@ import {SharedLevel} from './shared.mjs';
 import {installPlayInput} from './play-input.mjs';
 import {paintPixelLayer} from './pixel-view.mjs';
 import {Autosave} from './autosave.mjs';
+import {projectName} from './project-state.mjs';
+import {installProjectControls} from './project-controls.mjs';
 import {installChat} from './chat.mjs';
 import {installAssetTray} from './asset-tray.mjs';
 import {installNumberScrub} from './number-scrub.mjs';
 import {installGestures} from './gestures.mjs';
-import {uid,decode,importImages,snapshot,saveProject,readProject,exportProject,exportArtworkRequest} from './io.mjs';
+import {uid,decode,importImages,snapshot,saveProject as saveProjectFile,readProject,exportProject,exportArtworkRequest} from './io.mjs';
 import {validateProject} from './engine.mjs';
 import {hsbToHex} from './color.mjs';
 import {prepareArtwork,getArtworkRequest,applyArtwork,applyAssetSheet,prepareAssetArtwork,getAssetArtworkRequest,applyAssetArtwork} from './artwork.mjs';
@@ -46,8 +48,8 @@ document.addEventListener('touchmove',e=>{if(!e.target.closest('#asset-items,.pa
 document.addEventListener('dblclick',e=>{if(!e.target.closest('input,select'))e.preventDefault()},{passive:false});
 document.addEventListener('wheel',e=>{if(e.ctrlKey||e.metaKey)e.preventDefault()},{passive:false});
 const current=()=>state.objects.find(o=>o.id===selected);
-function checkpoint(before=snapshot(state)){localRevision++;queueMicrotask(()=>{shared?.push(before,snapshot(state));autosave?.changed()});history.push(before);if(history.length>40)history.shift();future=[];$('#undo').disabled=false}
-function refresh(keepDimensions=false){const o=current();$('#inspector').hidden=playing||!o||tool==='block'||tool==='region';if(!keepDimensions)$('#dimensions').hidden=true;if(o){$('#piece-name').value=o.name;$('#piece-kind').value=o.kind;$('#piece-w').value=o.w;$('#piece-h').value=o.h;$('#piece-inset').value=o.inset;$('#piece-inset').max=o.h-1;$('#piece-angle').value=Math.round(o.rotation||0);for(const id of ['piece-name','piece-kind','piece-w','piece-h','piece-inset','piece-angle','flip','duplicate','delete'])$('#'+id).disabled=!!o.locked}$('#project-name').value=state.name;$('#undo').disabled=shared?.connected?!shared.canUndo:!history.length;$('#assets-button').hidden=!state.assets.length;$('#coordinates').textContent=`${Math.round(camera.z*100)}%`;if(!adjustBefore)syncColorSliders();workspaces?.refresh()}
+function checkpoint(before=snapshot(state)){localRevision++;const record=autosave?.record,epoch=shared?.epoch;queueMicrotask(()=>{if(record!==autosave?.record||epoch!==shared?.epoch)return;autosave?.changed();shared?.push(before,snapshot(state))});history.push(before);if(history.length>40)history.shift();future=[];$('#undo').disabled=false}
+function refresh(keepDimensions=false){const o=current();$('#inspector').hidden=playing||!o||tool==='block'||tool==='region';if(!keepDimensions)$('#dimensions').hidden=true;if(o){$('#piece-name').value=o.name;$('#piece-kind').value=o.kind;$('#piece-w').value=o.w;$('#piece-h').value=o.h;$('#piece-inset').value=o.inset;$('#piece-inset').max=o.h-1;$('#piece-angle').value=Math.round(o.rotation||0);for(const id of ['piece-name','piece-kind','piece-w','piece-h','piece-inset','piece-angle','flip','duplicate','delete'])$('#'+id).disabled=!!o.locked}if(document.activeElement!==$('#project-name'))$('#project-name').value=projectName(state.name)||'';$('#undo').disabled=shared?.connected?!shared.canUndo:!history.length;$('#assets-button').hidden=!state.assets.length;$('#coordinates').textContent=`${Math.round(camera.z*100)}%`;if(!adjustBefore)syncColorSliders();workspaces?.refresh()}
 function colorTargets(){return colorScope==='all'||!current()?state.objects.filter(o=>!o.collisionOnly&&!o.locked):current().collisionOnly||current().locked?[]:[current()]}
 function syncColorSliders(){const o=colorTargets()[0];for(const key of ['hue','saturation','brightness','black','white'])$('#color-'+key).value=o?.adjust?.[key]??(key==='white'?255:0);$('#color-scope').textContent=colorScope==='all'?'All':'Selected';$('#color-scope').setAttribute('aria-pressed',String(colorScope==='all'));for(const el of $$('#color-toolbar input'))el.disabled=!o}
 $('#color-button').onclick=()=>{colorScope=current()?'selected':'all';$('#color-toolbar').hidden=!$('#color-toolbar').hidden;$('#color-button').setAttribute('aria-pressed',String(!$('#color-toolbar').hidden));syncColorSliders()};
@@ -104,14 +106,14 @@ $('#duplicate').onclick=duplicate;$('#delete').onclick=remove;
 async function restore(project){state={...project,assets:project.assets.map(a=>({...a})),objects:project.objects.map(o=>({...o})),spawn:{...project.spawn}};selected=null;regionIds=null;brush=null;await cacheAssets(state.assets);setTool(state.objects.length?'select':'block');refresh();renderPalette();showAssets(!$('#assets').hidden&&state.assets.length>0)}
 async function undo(redo=false){if(playing||importing)return;if(shared?.connected){if(redo)return;try{await shared.queue;await shared.tool('undo_level',{revision:shared.revision})}catch(e){message(e.message)}return}const from=redo?future:history,to=redo?history:future;if(!from.length)return;to.push(snapshot(state));await restore(from.pop());localRevision++;autosave?.changed()}
 $('#undo').onclick=()=>undo();
-$('#project-name').onchange=e=>{checkpoint();state.name=e.target.value.trim()||'Untitled';refresh()};$('#grid').onchange=e=>{grid=Number(e.target.value);saveViewPrefs()};$('#pixel-view').onchange=e=>{pixelView=e.target.checked;saveViewPrefs()};
+$('#project-name').onchange=e=>{const name=projectName(e.target.value);if(!name){message('Give the project a name before saving.');return}if(name!==state.name){checkpoint();state.name=name}refresh()};$('#grid').onchange=e=>{grid=Number(e.target.value);saveViewPrefs()};$('#pixel-view').onchange=e=>{pixelView=e.target.checked;saveViewPrefs()};
 function fit(){if(input?.active())input.cancel();camera.rotation=0;const b=bounds(state.objects,state.spawn),pad=width<680?80:65;camera.z=clamp(Math.min((width-2*pad)/Math.max(80,b.w),(height-2*pad)/Math.max(80,b.h)),.25,5);camera.x=b.x+b.w/2-width/(2*camera.z);camera.y=b.y+b.h/2-height/(2*camera.z);refresh()}
 $('#fit').onclick=fit;
 function exportBusy(fn){if(importing){message('Finish importing first.');return}return fn()}
-$('#save').onclick=()=>exportBusy(()=>{saveProject(state);$('#project').hidden=true});
+$('#save').onclick=()=>{if(!ensureProjectName())return;return exportBusy(()=>{saveProjectFile(state);void autosave?.flush();$('#project').hidden=true})};
 $('#load').onclick=()=>exportBusy(()=>$('#project-file').click());
 $('#project-file').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;try{const project=await readProject(file);await beginProject(project);$('#project').hidden=true;message('Opened')}catch(error){message(error.message)}};
-$('#export').onclick=()=>exportBusy(async()=>{try{message('Exporting…',0);await exportProject(state,images);$('#project').hidden=true;message('ZIP ready')}catch(error){message(error.message)}});
+$('#export').onclick=()=>ensureProjectName()&&exportBusy(async()=>{try{message('Exporting…',0);await exportProject(state,images);$('#project').hidden=true;message('ZIP ready')}catch(error){message(error.message)}});
 $('#scale-level').onclick=()=>{if(playing)return;cancelGesture();const factor=.75,before=snapshot(state);for(const o of state.objects){o.x*=factor;o.y*=factor;o.w=Math.max(1,o.w*factor);o.h=Math.max(1,o.h*factor);o.inset=Math.min(o.h-1,(o.inset||0)*factor);if(o.collisionOnly){o.points=o.points.map(p=>({x:p.x*factor,y:p.y*factor}));o.brushWidth=Math.max(1,o.brushWidth*factor)}}state.spawn.x*=factor;state.spawn.y*=factor;checkpoint(before);$('#project').hidden=true;fit();refresh();message('Level scaled to 75%')};
 $('#clear').onclick=()=>exportBusy(async()=>{await beginProject({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});showAssets(false);$('#project').hidden=true});
 $('#import-button').onclick=()=>{if(importing)return;$('#project').hidden=true;$('#import-dialog').showModal()};$('#import-options').onclick=()=>{$('#project').hidden=true;$('#import-dialog').showModal()};$('#close-import').onclick=()=>$('#import-dialog').close();
@@ -176,14 +178,24 @@ function render(now){requestAnimationFrame(render);const elapsed=lastTime?Math.m
 }
 refresh();requestAnimationFrame(render);
 // The browser and remote MCP connection use the same state/actions.
-async function applyAgentProject(next,{guard=()=>true,remote=true}={}){const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!gesture&&!numberScrub?.active()&&!importing&&revision===localRevision&&guard()});if(gesture||numberScrub?.active()||importing||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();autosave?.changed()}
+async function applyAgentProject(next,{guard=()=>true,remote=true}={}){const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!projectBusy()&&revision===localRevision&&guard()});if(projectBusy()||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();if(!remote)autosave?.changed()}
 async function previewPNG(){const c=document.createElement('canvas');const scale=Math.min(1,960/canvas.width);c.width=Math.round(canvas.width*scale);c.height=Math.round(canvas.height*scale);const context=c.getContext('2d');context.imageSmoothingEnabled=false;context.drawImage(canvas,0,0,c.width,c.height);return c.toDataURL('image/png')}
-shared=new SharedLevel({snapshot:()=>snapshot(state),apply:applyAgentProject,busy:()=>!!gesture||!!numberScrub?.active()||importing,
+function projectBusy(){return !!gesture||!!numberScrub?.active()||importing||!!adjustBefore||!!opacityBefore||document.activeElement===$('#project-name')&&$('#project-name').value!==(projectName(state.name)||'')}
+function ensureProjectName(){if(projectName(state.name))return true;$('#project').hidden=false;$('#project-name').focus();message('Give the project a name before saving.');return false}
+function saveProject(project){if(ensureProjectName())saveProjectFile(project)}
+function syncStatus(text){$('#save-status').textContent=text;projectControls?.status(text)}
+let projectControls=null;
+shared=new SharedLevel({snapshot:()=>snapshot(state),apply:applyAgentProject,busy:projectBusy,
+ beforeConnect:async token=>{if(autosave?.blocked||token&&autosave?.dirty)throw Error('Local changes are kept. Open Projects to save a recovery copy or load the latest version.');if(!token){if(!ensureProjectName())throw Error('Give the project a name before connecting.');await Promise.resolve();await autosave?.flush();if(autosave?.dirty||autosave?.blocked)throw Error('Save the project before connecting. Your local changes are kept.');if(autosave?.record?.token)return{projectToken:autosave.record.token,revision:autosave.record.revision}}},
+ accepted:(room,token)=>autosave?.acceptRemote(room,token),connection:()=>{autosave?.watch();projectControls?.refresh()},status:syncStatus,
  setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});
 async function leaveShared(){await shared.queue;shared.detach();window.history?.replaceState(null,'',location.pathname)}
 async function beginProject(project){cancelGesture();numberScrub?.cancel();if(playing)togglePlay();if(typeof location!=='undefined')await leaveShared();history=[];future=[];localRevision++;if(autosave?.ready)await autosave.start(project);else await restore(project);fit()}
-$('#projects-button').onclick=async()=>{if(importing){message('Finish importing first.');return}const list=$('#saved-projects');list.replaceChildren();try{for(const p of await autosave?.list()||[]){const button=document.createElement('button');button.textContent=p.project.name||'Untitled';button.onclick=async()=>{try{cancelGesture();numberScrub?.cancel();if(playing)togglePlay();await leaveShared();await autosave.load(p.id);history=[];future=[];localRevision++;fit();$('#projects-dialog').close()}catch(error){message(error.message)}};list.append(button)}}catch(error){message(error.message)}$('#project').hidden=true;$('#projects-dialog').showModal()};
-$('#close-projects').onclick=()=>$('#projects-dialog').close();
+projectControls=installProjectControls({getSave:()=>autosave,getShared:()=>shared,snapshot:()=>snapshot(state),message,icon,
+ prepare:()=>{cancelGesture();numberScrub?.cancel();if(playing)togglePlay()},leave:leaveShared,
+ start:beginProject,opened:()=>{history=[];future=[];localRevision++;fit();refresh();showAgent()},
+ reset:async()=>{shared.detach();history=[];future=[];localRevision++;window.history.replaceState(null,'',location.pathname);await autosave.start({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});fit();refresh();showAgent()}
+});
 installChat({
  connectChatGPT:openAgent,
  history:async()=>shared.connected?(await shared.request('/api/rooms/'+shared.token+'/chat')).messages:[],
@@ -202,7 +214,7 @@ $('#agent-button').onclick=openAgent;$('#close-agent').onclick=()=>$('#agent-dia
 $('#agent-connect').onclick=async()=>{const button=$('#agent-connect');button.disabled=true;try{if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');if(!shared.connected)await shared.connect();window.history.replaceState(null,'','#room='+shared.token);showAgent();message('Link ready. Add it in ChatGPT.')}catch(error){message(error.message,6000)}finally{button.disabled=false}};
 async function copyAgentText(text){try{await navigator.clipboard.writeText(text);message('Copied')}catch{$('#agent-url').value=text;$('#agent-url').focus();$('#agent-url').select();message('Select and copy the link')}}
 $('#copy-agent').onclick=()=>copyAgentText(shared.url());$('#copy-room').onclick=()=>copyAgentText(location.origin+'/#room='+shared.token);
-$('#agent-disconnect').onclick=async()=>{try{await shared.disconnect();window.history.replaceState(null,'',location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};
+$('#agent-disconnect').onclick=async()=>{try{await shared.disconnect();if(autosave?.record){autosave.record.roomToken=null;await autosave.cacheCurrent();await autosave.pull()}window.history.replaceState(null,'',autosave?.record?.token?'#project='+autosave.record.token:location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};
 async function executeAgent(name,args={}){
  if((gesture||numberScrub?.active()||importing)&&!['get_level','get_asset_image','get_artwork_request','get_asset_artwork_request','inspect_sprite_sheet','simulate_player','get_canvas_preview'].includes(name))throw Error('The user is editing. Retry when the gesture or import finishes.');
  if(shared.connected)return shared.tool(name,args);
@@ -282,9 +294,9 @@ if(document.modelContext?.registerTool){const lifecycle=new AbortController();fo
 if(typeof location!=='undefined'){
  const room=location.hash.match(/^#room=([a-f0-9]{64})$/)?.[1],project=location.hash.match(/^#project=([a-f0-9]{64})$/)?.[1];
  if(typeof indexedDB!=='undefined'){
-  autosave=new Autosave({snapshot:()=>snapshot(state),restore:async p=>{await restore(p);fit()},status:text=>$('#save-status').textContent=text,link:token=>{if(!location.hash.startsWith('#room='))window.history.replaceState(null,'','#project='+token)}});
+  autosave=new Autosave({snapshot:()=>snapshot(state),restore:async p=>{await restore(p);fit()},apply:applyAgentProject,busy:projectBusy,shared:()=>shared,error:text=>message(text,7000),status:syncStatus,link:token=>{if(!location.hash.startsWith('#room='))window.history.replaceState(null,'','#project='+token)}});
   app.inert=true;
-  (async()=>{try{if(room){await shared.connect(room);showAgent()}await autosave.init({token:project,skipRestore:!!room});if(room)autosave.changed()}catch(error){message(error.message,6000);if(!autosave.ready){window.history.replaceState(null,'',location.pathname);await autosave.init()}}finally{app.inert=false}})();
+  (async()=>{try{await autosave.init({token:project,roomToken:room});const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}}catch(error){message(error.message,6000);if(!autosave.ready){window.history.replaceState(null,'',location.pathname);await autosave.init()}}finally{app.inert=false}})();
   window.addEventListener('online',()=>void autosave.flush());setInterval(()=>{if(autosave.dirty)void autosave.flush()},15000);
  }else if(room)shared.connect(room).then(showAgent).catch(error=>message(error.message,6000));
 }

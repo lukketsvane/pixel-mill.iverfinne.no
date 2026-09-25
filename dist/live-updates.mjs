@@ -15,7 +15,7 @@ export class LiveUpdates{
   source.addEventListener('retry',()=>{if(epoch===this.epoch){this.live=false;this.status('Reconnecting…');this.schedule(epoch)}});
   source.onerror=()=>{if(epoch===this.epoch){this.live=false;this.status('Reconnecting…');this.schedule(epoch)}};
  }
- schedule(epoch){clearTimeout(this.timer);if(epoch!==this.epoch||!this.path||globalThis.document?.hidden)return;this.timer=setTimeout(async()=>{if(epoch!==this.epoch)return;if(!this.live||this.deferred)await this.pull();this.schedule(epoch)},this.deferred?350:this.live?10000:2000)}
+ schedule(epoch){clearTimeout(this.timer);if(epoch!==this.epoch||!this.path||globalThis.document?.hidden)return;this.timer=setTimeout(async()=>{if(epoch!==this.epoch)return;if(!this.live||this.deferred)await this.pull();this.schedule(epoch)},this.deferred?350:this.live?10000:2000);this.timer?.unref?.()}
  async pull(){if(!this.path||globalThis.document?.hidden)return;if(this.inflight){this.again=true;return this.inflight}const epoch=this.epoch;
   const task=(async()=>{do{this.again=false;const applied=await this.refresh(()=>epoch===this.epoch);if(epoch===this.epoch)this.deferred=applied===false}while(this.again&&epoch===this.epoch)})().catch(error=>{if(epoch===this.epoch){if([404,410].includes(error.status)){this.stop();this.gone(error.message)}else{this.live=false;this.status('Offline · edits kept')}}}).finally(()=>{if(this.inflight===task)this.inflight=null;if(epoch===this.epoch)this.schedule(epoch)});
   this.inflight=task;return task;
