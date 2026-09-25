@@ -20,7 +20,7 @@ test('MCP Streamable HTTP handshake, reads, atomic edits, stale revisions, undo,
  result=await rpc('tools/call',{name:'undo_level',arguments:{revision:1}});assert.equal(result.structuredContent.objects.length,0);assert.equal(result.structuredContent.revision,2);
  const fresh=await call('/api/rooms/'+room.token+'?revision=2');assert.equal(fresh.status,304);
  const preview=await call('/api/rooms/'+room.token+'/preview','POST',{revision:2,src:'data:image/png;base64,aGVsbG8='});assert.equal(preview.status,200);result=await rpc('tools/call',{name:'get_canvas_preview'});assert.equal(result.content[1].type,'image');
- await call('/api/rooms/'+room.token,'DELETE');assert.equal((await call(url,'POST',{jsonrpc:'2.0',id:1,method:'tools/list'})).status,404);
+ await call('/api/rooms/'+room.token,'DELETE');assert.equal((await call(url,'POST',{jsonrpc:'2.0',id:1,method:'tools/list'})).status,410);
 });
 test('human and agent edits merge on different pieces and conflict on the same piece',()=>{let state=editProject(base,[{type:'block',id:'a',x:0,y:0},{type:'block',id:'b',x:80,y:0}]);const human=editProject(state,[{type:'update',id:'a',changes:{x:8}}]),agent=editProject(state,[{type:'update',id:'b',changes:{rotation:45}}]);const merged=applyDiff(agent,projectDiff(state,human));assert.equal(merged.objects[0].x,8);assert.equal(merged.objects[1].rotation,45);const clash=editProject(state,[{type:'update',id:'a',changes:{x:12}}]);assert.throws(()=>applyDiff(clash,projectDiff(state,human)),/Conflict/)});
 
@@ -34,18 +34,11 @@ test('MCP imports PNG, composes exact sheet, slices frames and undoes the batch'
  let r=await tool('import_image',{revision:0,name:'red',dataUrl:red});assert.equal(r.structuredContent.revision,1);const first=r.structuredContent.assetIds[0];
  r=await tool('import_image',{revision:1,name:'red2',dataUrl:red});assert.equal(r.structuredContent.revision,2);
  r=await tool('create_spritesheet',{revision:2,assetIds:[first,r.structuredContent.assetIds[0]],columns:2,cellWidth:3,cellHeight:3,name:'sheet',includeImage:true});
- assert.deepEqual([r.structuredContent.width,r.structuredContent.height,r.structuredContent.frames],[6,3,2]);
- assert.equal(r.content[1].type,'image');
+ assert.deepEqual([r.structuredContent.width,r.structuredContent.height,r.structuredContent.frames],[6,3,2]);assert.equal(r.content[1].type,'image');
  const png=await decodePNG(pngBytes('data:image/png;base64,'+r.content[1].data));assert.equal(png.pixels[3],0);assert.equal(png.pixels[(1*6+0)*4],255);
- const sheet=r.structuredContent.assetIds[0];r=await tool('slice_spritesheet',{revision:3,assetId:sheet,columns:2,rows:1});
- assert.equal(r.structuredContent.assetIds.length,2);assert.equal(r.structuredContent.cellWidth,3);
- r=await tool('undo_level',{revision:4});assert.equal(r.structuredContent.assets.length,3);
- r=await tool('import_image',{revision:4,name:'stale',dataUrl:red});assert.equal(r.isError,true);
- const source=dataURL(await encodePNG({w:4,h:2,pixels:Uint8Array.from([
-  255,0,0,255,0,0,0,0,0,0,0,0,0,0,255,255,
-  255,0,0,255,0,0,0,0,0,0,0,0,0,0,255,255
- ])}));
- r=await tool('import_image',{revision:5,name:'parts',dataUrl:source,split:true});
- assert.equal(r.structuredContent.assetIds.length,2);
+ const sheet=r.structuredContent.assetIds[0];r=await tool('slice_spritesheet',{revision:3,assetId:sheet,columns:2,rows:1});assert.equal(r.structuredContent.assetIds.length,2);assert.equal(r.structuredContent.cellWidth,3);
+ r=await tool('undo_level',{revision:4});assert.equal(r.structuredContent.assets.length,3);r=await tool('import_image',{revision:4,name:'stale',dataUrl:red});assert.equal(r.isError,true);
+ const source=dataURL(await encodePNG({w:4,h:2,pixels:Uint8Array.from([255,0,0,255,0,0,0,0,0,0,0,0,0,0,255,255,255,0,0,255,0,0,0,0,0,0,0,0,0,0,255,255])}));
+ r=await tool('import_image',{revision:5,name:'parts',dataUrl:source,split:true});assert.equal(r.structuredContent.assetIds.length,2);
  const level=await tool('get_level',{});assert.deepEqual(level.structuredContent.assets.slice(-2).map(a=>[a.w,a.h]),[[1,2],[1,2]]);
 });
