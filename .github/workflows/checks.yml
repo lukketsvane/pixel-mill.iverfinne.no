@@ -1,0 +1,33 @@
+name: Pixel Mill checks
+on:
+  push:
+    branches: [main, asset-sheet-studio]
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: pixel-mill-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Archive tracked source only
+        run: git archive --format=zip --output=pixel-mill-source.zip HEAD
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pixel-mill-source
+          path: pixel-mill-source.zip
+          retention-days: 3
+      - run: npm ci --ignore-scripts
+      - run: npm test
+      - run: npm run build
