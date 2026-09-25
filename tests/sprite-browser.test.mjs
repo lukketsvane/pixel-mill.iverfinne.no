@@ -1,5 +1,6 @@
 // PIXEL_MILL_BROWSER=1 node --test tests/sprite-browser.test.mjs
 import test from 'node:test';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import fs from 'node:fs/promises';
@@ -45,7 +46,7 @@ test('browser: one character sheet retains source, editable row/frame hierarchy,
  try{
   const pixels=new Uint8Array(128*128*4);for(let row=0;row<8;row++)for(let col=0;col<8;col++){if(row===7&&col===7)continue;for(let y=3;y<13;y++)for(let x=3;x<13;x++)pixels.set([40+row*20,40+col*20,120,255],((row*16+y)*128+col*16+x)*4)}
   const original=await encodePNG({w:128,h:128,pixels});
-  await page.locator('#import-button').click();assert.equal(await page.locator('#import-cell-size').inputValue(),'16');assert.equal(await page.locator('#import-kind').inputValue(),'sheet');
+  await page.locator('#import-button').click();assert.equal(await page.locator('#import-cell-size').count(),0);assert.equal(await page.locator('#import-kind').inputValue(),'sheet');
   await page.locator('#files').setInputFiles({name:'character-eight-rows.png',mimeType:'image/png',buffer:Buffer.from(original)});
   await waitGroups(page,8);assert.equal(await page.locator('#assets-tab').getAttribute('aria-selected'),'true');
   assert.equal(await page.locator('.sprite-grid-form').count(),0,'a clear 8×8 sheet groups immediately without a setup screen');
@@ -80,10 +81,10 @@ test('browser: one character sheet retains source, editable row/frame hierarchy,
   await page.getByRole('button',{name:'Merge selected groups',exact:true}).click();await waitGroups(page,7);meta=await sheet(page,assetId);assert.equal(meta.groups[0].frameIds.length,16);
   await page.locator(`[data-frame="${second}"]`).click();await page.getByRole('button',{name:'Start a new group at selected frame',exact:true}).click();await waitGroups(page,8);meta=await sheet(page,assetId);assert.equal(meta.groups[0].frameIds.length,8);assert.equal(meta.groups[1].frameIds.length,8);
 
-  await page.getByRole('button',{name:'Edit cell size, spacing and grouping',exact:true}).click();await page.locator('.sprite-grid-form [name=grouping]').selectOption('column');await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);
+  await page.getByRole('button',{name:'Edit sheet grouping',exact:true}).click();await page.locator('.sprite-organize-form [name=grouping]').selectOption('column');await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);
   meta=await sheet(page,assetId);assert.equal(meta.grouping,'column');assert.deepEqual(meta.groups[0].frameIds,['frame-0-0','frame-1-0','frame-2-0','frame-3-0','frame-4-0','frame-5-0','frame-6-0','frame-7-0']);
   const columns=meta.groups;
-  await page.getByRole('button',{name:'Edit cell size, spacing and grouping',exact:true}).click();await page.locator('.sprite-grid-form [name=grouping]').selectOption('manual');await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);
+  await page.getByRole('button',{name:'Edit sheet grouping',exact:true}).click();await page.locator('.sprite-organize-form [name=grouping]').selectOption('manual');await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);
   meta=await sheet(page,assetId);assert.equal(meta.grouping,'manual');assert.deepEqual(meta.groups.map(({type,...group})=>group),columns.map(({type,...group})=>group),'manual mode preserves existing animation membership and settings');
   await page.getByRole('button',{name:`Open ${meta.groups[0].name} frames`,exact:true}).click();await page.locator(`[data-frame="${meta.groups[0].frameIds[0]}"]`).click();
   await page.getByRole('button',{name:`Open ${meta.groups[1].name} frames`,exact:true}).click();await page.locator(`[data-frame="${meta.groups[1].frameIds[0]}"]`).click();assert.equal(await page.locator('.sprite-scope output').textContent(),'2 frames','frame selections survive drilling into another animation');
@@ -92,16 +93,41 @@ test('browser: one character sheet retains source, editable row/frame hierarchy,
   await page.getByRole('button',{name:'Merge selected groups',exact:true}).click();await waitGroups(page,1);meta=await sheet(page,assetId);assert.equal(meta.groups[0].frameIds.length,64,'merging is explicit, not a side effect of manual mode');
   await page.locator('[data-frame="frame-0-0"]').click();await page.locator('[data-frame="frame-0-1"]').click();await page.getByRole('button',{name:'Make a group from selected frames',exact:true}).click();await waitGroups(page,2);
   meta=await sheet(page,assetId);assert.deepEqual(meta.groups.map(g=>g.frameIds.length),[62,2]);const manual=meta;
-  await page.getByRole('button',{name:'Edit cell size, spacing and grouping',exact:true}).click();await page.locator('.sprite-grid-form [name=cellWidth]').fill('14');await page.locator('.sprite-grid-form [name=cellHeight]').fill('14');
-  await page.locator('.sprite-spacing summary').click();await page.locator('.sprite-grid-form [name=gutterX]').fill('2');await page.locator('.sprite-grid-form [name=gutterY]').fill('2');await page.locator('.sprite-grid-form [name=grouping]').selectOption('row');
-  await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);meta=await sheet(page,assetId);assert.equal(meta.frames[1].x,16);assert.equal(meta.frames[1].w,14);assert.equal(meta.gutterX,2);assert.equal(meta.preserveEmpty,true);
+  await page.getByRole('button',{name:'Edit sheet grouping',exact:true}).click();assert.equal(await page.locator('.sprite-organize-form input[type=number]').count(),0);await page.locator('.sprite-organize-form [name=grouping]').selectOption('row');await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);meta=await sheet(page,assetId);assert.equal(meta.frames[1].x,16);assert.equal(meta.frames[1].w,16);assert.equal(meta.preserveEmpty,true);
 
-  await format.selectOption('sheet');const full=await decodePNG(await downloadBytes(page,()=>exportButton.click()));assert.deepEqual([full.w,full.h],[126,126]);
+  await format.selectOption('sheet');const full=await decodePNG(await downloadBytes(page,()=>exportButton.click()));assert.deepEqual([full.w,full.h],[128,128]);
   await format.selectOption('strips');const strips=entries(await downloadBytes(page,()=>exportButton.click()));assert.equal([...strips.keys()].filter(name=>name.startsWith('strips/')).length,8);assert.ok(strips.has('source.png'));assert.ok(strips.has('sprite-sheet.json'));assert.deepEqual((await decodePNG(strips.get('source.png'))).pixels,pixels);
   await format.selectOption('frames');const frames=entries(await downloadBytes(page,()=>exportButton.click()));assert.equal([...frames.keys()].filter(name=>name.startsWith('frames/')).length,64);const manifest=JSON.parse(frames.get('sprite-sheet.json'));assert.equal(manifest.type,'sprite_sheet');assert.equal(manifest.spriteSheet.groups.length,8);
   const saved=await project(page);assert.equal(saved.assets.length,1);assert.equal(saved.assets[0].src,source,'editing and exports preserve exact retained image source');assert.equal(saved.objects.length,0);
   // Undo is shared with the level editor: one grouping operation, one history step.
   await page.evaluate(()=>document.querySelector('#undo').click());await waitGroups(page,2);assert.deepEqual(await sheet(page,assetId),manual);
   assert.deepEqual(h.errors,[],'the imported hierarchy is interactive without browser errors');
+ }finally{await h.close()}
+});
+
+test('browser: actual JPEG animation sheet and irregular PNG atlas import without grid setup',{skip:!process.env.PIXEL_MILL_BROWSER||!process.env.PIXEL_MILL_IMPORT_CHARACTER||!process.env.PIXEL_MILL_IMPORT_ENVIRONMENT,timeout:120000},async()=>{
+ const h=await harness(),{page}=h;
+ try{
+  await page.locator('#import-button').click();assert.equal(await page.locator('#import-kind').inputValue(),'sheet');assert.equal(await page.locator('#import-dialog input[type=number]:visible').count(),0);
+  await page.locator('#files').setInputFiles([process.env.PIXEL_MILL_IMPORT_CHARACTER,process.env.PIXEL_MILL_IMPORT_ENVIRONMENT]);
+  await waitGroups(page,8);let saved=await project(page);assert.equal(saved.assets.length,2);
+  const character=saved.assets.find(a=>a.spriteSheet?.type==='character'),environment=saved.assets.find(a=>a.spriteSheet?.type==='environment');assert.ok(character);assert.ok(environment);
+  assert.deepEqual([character.w,character.h,character.spriteSheet.rows,character.spriteSheet.cols,character.spriteSheet.frames.length],[1254,1254,8,8,64]);assert.deepEqual(character.spriteSheet.groups.map(g=>g.frameIds.length),Array(8).fill(8));assert.equal(character.sheet.tileSize,16);
+  assert.equal(await page.locator('.sprite-grid-form,.sprite-organize-form').count(),0);assert.equal(await page.locator('.sprite-frame').count(),0);
+  const format=page.getByRole('combobox',{name:'Sprite export format',exact:true}),exportButton=page.getByRole('button',{name:'Export sprite sheet artwork',exact:true});
+  const full=await decodePNG(await downloadBytes(page,()=>exportButton.click()));assert.deepEqual([full.w,full.h],[1254,1254]);
+  await page.getByRole('button',{name:'Open row-07 frames',exact:true}).click();assert.equal(await page.locator('.sprite-frame').count(),8);
+  const frame=character.spriteSheet.frames.find(f=>f.row===6&&f.col===3);await page.locator(`[data-frame="${frame.id}"]`).click();
+  const exported=await decodePNG(await downloadBytes(page,()=>exportButton.click()));assert.deepEqual([exported.w,exported.h],[frame.w,frame.h]);
+  for(let y=0;y<frame.h;y++)assert.deepEqual(exported.pixels.slice(y*frame.w*4,(y+1)*frame.w*4),full.pixels.slice(((frame.y+y)*full.w+frame.x)*4,((frame.y+y)*full.w+frame.x+frame.w)*4),'water and character keep the exact original spacing');
+  if(process.env.PIXEL_MILL_SCREENSHOTS)await page.screenshot({path:path.join(process.env.PIXEL_MILL_SCREENSHOTS,'recognized-character-mobile.png')});
+  await page.getByRole('button',{name:`Edit ${environment.name}`,exact:true}).click();await waitGroups(page,environment.spriteSheet.groups.length);
+  assert.deepEqual([environment.w,environment.h],[2048,391]);assert.ok(environment.spriteSheet.frames.length>400);assert.ok(environment.spriteSheet.frames.some(f=>f.w===739&&f.h===150));assert.ok(environment.spriteSheet.frames.some(f=>f.w<16&&f.h<16));
+  assert.equal(await page.locator('[data-play-group]').count(),0,'environment sets do not pretend to be animation strips');
+  const group=environment.spriteSheet.groups[2];await page.getByRole('button',{name:`Open ${group.name} frames`,exact:true}).click();assert.equal(await page.locator('.sprite-asset-grid .sprite-frame').count(),group.frameIds.length);
+  await page.getByRole('button',{name:'Select the whole sprite sheet',exact:true}).click();await format.selectOption('sheet');const atlas=await decodePNG(await downloadBytes(page,()=>exportButton.click()));assert.deepEqual([atlas.w,atlas.h],[2048,391]);
+  const source=await decodePNG(await fs.readFile(process.env.PIXEL_MILL_IMPORT_ENVIRONMENT));assert.equal(createHash('sha256').update(atlas.pixels).digest('hex'),createHash('sha256').update(source.pixels).digest('hex'),'full sheet export preserves every original pixel');
+  if(process.env.PIXEL_MILL_SCREENSHOTS)await page.screenshot({path:path.join(process.env.PIXEL_MILL_SCREENSHOTS,'recognized-environment-mobile.png')});
+  saved=await project(page);assert.equal(saved.assets.length,2);assert.equal(saved.objects.length,0);assert.equal(saved.assets[0].src,character.src);assert.deepEqual(h.errors,[]);
  }finally{await h.close()}
 });

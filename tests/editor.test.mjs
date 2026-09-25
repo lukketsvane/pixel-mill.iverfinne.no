@@ -13,7 +13,7 @@ class Element{
 }
 const html=fs.readFileSync(new URL('../dist/index.html',import.meta.url),'utf8'),all=[],ids=new Map();
 for(const m of html.matchAll(/<([a-z]+)\b([^>]*)>/g)){const e=new Element(m[1]),a=m[2];for(const d of a.matchAll(/data-([a-z]+)="([^"]+)"/g))e.dataset[d[1]]=d[2];const id=a.match(/\bid="([^"]+)"/)?.[1];if(id){e.id=id;ids.set(id,e)}for(const key of ['type','min','max','step'])e[key]=a.match(new RegExp(key+'="([^"]+)"'))?.[1]||'';e.value=a.match(/value="([^"]+)"/)?.[1]||'';e.checked=/\bchecked\b/.test(a);e.hidden=/\bhidden\b/.test(a);all.push(e)}
-for(const [id,value] of Object.entries({background:'auto',scale:'0.25',grid:'4','import-kind':'pieces','import-cell-size':'16'}))ids.get(id).value=value;
+for(const [id,value] of Object.entries({background:'auto',scale:'0.25',grid:'4','import-kind':'pieces'}))ids.get(id).value=value;
 ids.get('split').checked=true;
 const docListeners={},windowListeners={},tools=new Map();
 globalThis.document={getElementById:id=>ids.get(id),querySelector:s=>ids.get(s.slice(1)),querySelectorAll:s=>s==='input[type="number"]'?all.filter(e=>e.type==='number'):s==='#semantic-colors button'?all.filter(e=>e.dataset.role):all.filter(e=>e.dataset[s.match(/data-(\w+)/)?.[1]]),createElement:t=>new Element(t),createDocumentFragment:()=>new Element(),body:new Element(),addEventListener:(k,f)=>docListeners[k]=f,modelContext:{registerTool:t=>tools.set(t.name,t)}};

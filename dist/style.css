@@ -179,3 +179,5 @@ input[type=number]{touch-action:none;cursor:ew-resize;appearance:textfield;-moz-
 .sheet-actions #assets-undo{min-width:35px;width:35px;padding:7px}
 .sheet-actions #assets-undo svg{width:17px;height:17px}
 .sheet-detail-character .sheet-detail-head{margin-bottom:5px}
+
+#sheet-treatment{margin:8px 0 12px}#sheet-treatment>summary{font-size:11px;color:#999;cursor:pointer;padding:8px 0}#sheet-treatment[open]>summary{margin-bottom:8px}
