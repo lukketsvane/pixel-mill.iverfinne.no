@@ -1,47 +1,100 @@
 import fs from 'node:fs';
-function replace(file,before,after){let s=fs.readFileSync(file,'utf8');if(s.includes(after))return;if(!s.includes(before))throw Error('Expected source changed: '+file+' / '+before.slice(0,100));s=s.replace(before,after);fs.writeFileSync(file,s)}
-const app='dist/app.mjs';
-replace(app,"import {Autosave} from './autosave.mjs';","import {Autosave} from './autosave.mjs';\nimport {projectName} from './project-state.mjs';\nimport {installProjectControls} from './project-controls.mjs';");
-replace(app,'snapshot,saveProject,readProject','snapshot,saveProject as saveProjectFile,readProject');
-replace(app,"function checkpoint(before=snapshot(state)){localRevision++;queueMicrotask(()=>{shared?.push(before,snapshot(state));autosave?.changed()});", "function checkpoint(before=snapshot(state)){localRevision++;const record=autosave?.record,epoch=shared?.epoch;queueMicrotask(()=>{if(record!==autosave?.record||epoch!==shared?.epoch)return;autosave?.changed();shared?.push(before,snapshot(state))});");
-replace(app,"$('#project-name').value=state.name;", "if(document.activeElement!==$('#project-name'))$('#project-name').value=projectName(state.name)||'';");
-replace(app,"$('#project-name').onchange=e=>{checkpoint();state.name=e.target.value.trim()||'Untitled';refresh()};", "$('#project-name').onchange=e=>{const name=projectName(e.target.value);if(!name){message('Give the project a name before saving.');return}if(name!==state.name){checkpoint();state.name=name}refresh()};");
-replace(app,"$('#save').onclick=()=>exportBusy(()=>{saveProject(state);$('#project').hidden=true});", "$('#save').onclick=()=>{if(!ensureProjectName())return;return exportBusy(()=>{saveProjectFile(state);void autosave?.flush();$('#project').hidden=true})};");
-replace(app,"$('#export').onclick=()=>exportBusy(async()=>{", "$('#export').onclick=()=>ensureProjectName()&&exportBusy(async()=>{");
-const previous="async function applyAgentProject(next,{guard=()=>true,remote=true}={}){const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!gesture&&!numberScrub?.active()&&!importing&&revision===localRevision&&guard()});if(gesture||numberScrub?.active()||importing||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();autosave?.changed()}";
-replace(app,previous,"async function applyAgentProject(next,{guard=()=>true,remote=true}={}){const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!projectBusy()&&revision===localRevision&&guard()});if(projectBusy()||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();if(!remote)autosave?.changed()}");
-replace(app,"shared=new SharedLevel({snapshot:()=>snapshot(state),apply:applyAgentProject,busy:()=>!!gesture||!!numberScrub?.active()||importing,\n setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});",`function projectBusy(){return !!gesture||!!numberScrub?.active()||importing||!!adjustBefore||!!opacityBefore||document.activeElement===$('#project-name')&&$('#project-name').value!==(projectName(state.name)||'')}
-function ensureProjectName(){if(projectName(state.name))return true;$('#project').hidden=false;$('#project-name').focus();message('Give the project a name before saving.');return false}
-function saveProject(project){if(ensureProjectName())saveProjectFile(project)}
-function syncStatus(text){$('#save-status').textContent=text;projectControls?.status(text)}
-let projectControls=null;
-shared=new SharedLevel({snapshot:()=>snapshot(state),apply:applyAgentProject,busy:projectBusy,
- beforeConnect:async token=>{if(autosave?.blocked||token&&autosave?.dirty)throw Error('Local changes are kept. Open Projects to save a recovery copy or load the latest version.');if(!token){if(!ensureProjectName())throw Error('Give the project a name before connecting.');await Promise.resolve();await autosave?.flush();if(autosave?.dirty||autosave?.blocked)throw Error('Save the project before connecting. Your local changes are kept.');if(autosave?.record?.token)return{projectToken:autosave.record.token,revision:autosave.record.revision}}},
- accepted:(room,token)=>autosave?.acceptRemote(room,token),connection:()=>{autosave?.watch();projectControls?.refresh()},status:syncStatus,
- setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});`);
-const start="$('#projects-button').onclick=async()=>{if(importing){message('Finish importing first.');return}const list=$('#saved-projects');list.replaceChildren();try{for(const p of await autosave?.list()||[]){const button=document.createElement('button');button.textContent=p.project.name||'Untitled';button.onclick=async()=>{try{cancelGesture();numberScrub?.cancel();if(playing)togglePlay();await leaveShared();await autosave.load(p.id);history=[];future=[];localRevision++;fit();$('#projects-dialog').close()}catch(error){message(error.message)}};list.append(button)}}catch(error){message(error.message)}$('#project').hidden=true;$('#projects-dialog').showModal()};\n$('#close-projects').onclick=()=>$('#projects-dialog').close();";
-replace(app,start,`projectControls=installProjectControls({getSave:()=>autosave,getShared:()=>shared,snapshot:()=>snapshot(state),message,icon,
- prepare:()=>{cancelGesture();numberScrub?.cancel();if(playing)togglePlay()},leave:leaveShared,
- start:beginProject,opened:()=>{history=[];future=[];localRevision++;fit();refresh();showAgent()},
- reset:async()=>{shared.detach();history=[];future=[];localRevision++;window.history.replaceState(null,'',location.pathname);await autosave.start({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});fit();refresh();showAgent()}
-});`);
-replace(app,"await shared.disconnect();window.history.replaceState(null,'',location.pathname);showAgent();message('Agent link revoked')", "await shared.disconnect();if(autosave?.record){autosave.record.roomToken=null;await autosave.cacheCurrent();await autosave.pull()}window.history.replaceState(null,'',autosave?.record?.token?'#project='+autosave.record.token:location.pathname);showAgent();message('Agent link revoked')");
-replace(app,"autosave=new Autosave({snapshot:()=>snapshot(state),restore:async p=>{await restore(p);fit()},status:text=>$('#save-status').textContent=text,link:", "autosave=new Autosave({snapshot:()=>snapshot(state),restore:async p=>{await restore(p);fit()},apply:applyAgentProject,busy:projectBusy,shared:()=>shared,error:text=>message(text,7000),status:syncStatus,link:");
-replace(app,"if(room){await shared.connect(room);showAgent()}await autosave.init({token:project,skipRestore:!!room});if(room)autosave.changed()", "await autosave.init({token:project,roomToken:room});const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}");
-replace('dist/index.html','value="Untitled" aria-label="Level name" maxlength="60"','value="" placeholder="Project name" aria-label="Project name" required maxlength="60"');
-replace('dist/index.html','</head>','<link rel="stylesheet" href="./project-lifecycle.css">\n</head>');
-replace('dist/io.mjs',"export function saveProject(state){", "export function saveProject(state){requireProjectName(state);");
-replace('dist/io.mjs',"export async function exportProject(state,images){", "export async function exportProject(state,images){requireProjectName(state);");
-if(!fs.readFileSync('dist/io.mjs','utf8').includes("import {requireProjectName}"))fs.writeFileSync('dist/io.mjs',"import {requireProjectName} from './project-state.mjs';\n"+fs.readFileSync('dist/io.mjs','utf8'));
-replace('worker/vercel-blob.mjs','async get(key){','async get(key,options={}){');
-replace('worker/vercel-blob.mjs',"headers:{'accept-encoding':'identity'}", "headers:{'accept-encoding':'identity'},...(options.ifNoneMatch?{ifNoneMatch:options.ifNoneMatch}:{}),...(options.signal?{abortSignal:options.signal}:{})");
-replace('worker/vercel-blob.mjs','if(!result)return null;',"if(!result)return null;\n  if(result.statusCode===304)return{etag:result.blob.etag,notModified:true};");
-replace('scripts/build.mjs',"'artwork.mjs','agent.mjs'", "'artwork.mjs','agent.mjs','project-state.mjs'");
-replace('scripts/build.mjs',"+'\\n'+fs.readFileSync('worker/api.mjs','utf8')", "+'\\n'+fs.readFileSync('worker/project-store.mjs','utf8')+'\\n'+fs.readFileSync('worker/project-routes.mjs','utf8')+'\\n'+fs.readFileSync('worker/api.mjs','utf8')");
-const vercel=JSON.parse(fs.readFileSync('vercel.json','utf8'));vercel.functions={'api/handler.js':{maxDuration:60}};fs.writeFileSync('vercel.json',JSON.stringify(vercel,null,2)+'\n');
-replace('dist/live-updates.mjs','this.deferred?350:this.live?10000:2000)}','this.deferred?350:this.live?10000:2000);this.timer?.unref?.()}');
-// Existing regression expectations change only where behaviour is deliberate.
-replace('tests/editor.test.mjs',"ids.get('save').onclick();const saved=downloads.at(-1);", "const downloadCount=downloads.length;ids.get('save').onclick();assert.equal(downloads.length,downloadCount);ids.get('project-name').value='Editor test';ids.get('project-name').onchange({target:ids.get('project-name')});await Promise.resolve();ids.get('save').onclick();const saved=downloads.at(-1);");
-replace('tests/editor.test.mjs',"assert.equal((await fetch(url,{method:'POST',body:'{}'})).status,404)","assert.equal((await fetch(url,{method:'POST',body:'{}'})).status,410)");
-replace('tests/autosave-chat.test.mjs',"assert.notEqual(restored.record.token,token);", "assert.equal(restored.record.token,token);assert.equal(restored.dirty,true);assert.match(restored.blocked,/Conflict/);assert.equal(restored.record.project.name,'Local preserved');await restored.start(project);await restored.flush();assert.notEqual(restored.record.token,token);");
-console.log('Applied project lifecycle integration.');
+import {execFileSync as exec} from 'node:child_process';
+const git=(...args)=>exec('git',args,{encoding:'utf8'}).trim();
+const main='c0f0684218c291c58fb8e4b71a93e5bacee07fb9';
+try{git('fetch','--unshallow','origin')}catch{git('fetch','origin','main')}
+if(git('rev-parse','origin/main')!==main)throw Error('Main changed again; review it before merging.');
+let merged=false;try{git('merge-base','--is-ancestor',main,'HEAD');merged=true}catch{}
+if(!merged){
+ const ours=git('rev-parse','HEAD');git('config','user.name','Pixel Mill integration');git('config','user.email','41898282+github-actions[bot]@users.noreply.github.com');
+ const reviewed=['dist/app.mjs','dist/autosave.mjs','dist/index.html','dist/shared.mjs','scripts/build.mjs','worker/api.mjs','tests/editor.test.mjs','tests/autosave-chat.test.mjs','tests/project-lifecycle.test.mjs'];
+ const legacy=git('show',main+':tests/project-lifecycle.test.mjs');
+ try{git('merge','--no-commit','--no-ff',main)}catch{}
+ const conflicts=git('diff','--name-only','--diff-filter=U').split('\n').filter(Boolean);
+ if(conflicts.some(file=>!reviewed.includes(file)))throw Error('Unexpected merge conflict: '+conflicts.join(', '));
+ // Retain the reviewed canonical implementation for overlapping architecture;
+ // port the other implementation's undo-delete feature below. Independent
+ // browser fixtures, CSS and all unrelated main changes merge normally.
+ for(const file of reviewed)git('restore','--source='+ours,'--staged','--worktree',file);
+ fs.writeFileSync('tests/project-lifecycle-legacy.test.mjs',legacy);
+}
+function replace(file,before,after){let s=fs.readFileSync(file,'utf8');if(s.includes(after))return;if(!s.includes(before))throw Error('Expected source changed: '+file+' / '+before.slice(0,90));fs.writeFileSync(file,s.replace(before,after))}
+const store='worker/project-store.mjs',routes='worker/project-routes.mjs',save='dist/autosave.mjs',controls='dist/project-controls.mjs',app='dist/app.mjs';
+replace(store,'if(!record||record.deleted)throw','if(!record||record.deleted||record.deletedAt)throw');
+replace(store,'async function resolveProject(bucket,entryKey){','async function resolveProject(bucket,entryKey,{allowDeleted=false}={}){');
+replace(store,'const alias=await entry.json();assertStoredProject(alias);','const alias=await entry.json();if(!allowDeleted)assertStoredProject(alias);');
+replace(store,'const record=alias.ref?await object.json():alias;assertStoredProject(record);','const record=alias.ref?await object.json():alias;if(!allowDeleted)assertStoredProject(record);');
+replace(routes,"const found=await resolveProject(bucket,'projects/'+await keyFor(match[1])),{key,object,record:saved}=found;saved.projectToken??=match[1];",`const found=await resolveProject(bucket,'projects/'+await keyFor(match[1]),{allowDeleted:request.method==='POST'}),{key,object,record:saved}=found;saved.projectToken??=match[1];
+  if(request.method==='POST'){
+   const value=await body(request);revisionCheck(saved,value.revision);
+   if(!value.restore||!saved.deleted&&!saved.deletedAt)throw Error('No deleted project to restore.');
+   const backup=saved.recoveryKey?await bucket.get(saved.recoveryKey):null;
+   const original=backup?await backup.json():saved.project?saved:null;
+   if(!original?.project)throw Error('The recovery copy is unavailable.');
+   const next={...original,deleted:false,deletedAt:undefined,recoveryKey:undefined,revision:saved.revision+1,projectToken:match[1],roomToken:null};
+   await writeProject(bucket,key,next,object.etag);if(saved.recoveryKey)await bucket.delete(saved.recoveryKey);
+   return response({restored:true,...publicRoom(next)});
+  }`);
+replace(routes,"await writeProject(bucket,key,{deleted:true,revision:saved.revision+1},object.etag);\n   await bucket.delete(key+'/preview');return response({deleted:true});",`const revision=saved.revision+1,recoveryKey=key+'/deleted/'+privateToken();
+   // Keep an inaccessible recovery copy for explicit Undo delete. The root
+   // tombstone still invalidates every capability and every stale writer.
+   await writeProject(bucket,recoveryKey,saved);
+   try{await writeProject(bucket,key,{deleted:true,revision,recoveryKey},object.etag)}catch(error){await bucket.delete(recoveryKey);throw error}
+   await bucket.delete(key+'/preview');return response({deleted:true,revision});`);
+replace(save,".filter(p=>p.id!=='active').sort", ".filter(p=>p.id!=='active'&&!p.deletedAt&&!p.draft).sort");
+replace(save,"async active(){const meta=await this.get('active');return meta?this.get(meta.projectId):null}","async deleted(){return(await this.transaction('readonly',s=>s.getAll())).filter(p=>p.deletedAt).sort((a,b)=>b.deletedAt-a.deletedAt)}\n async active(){const meta=await this.get('active'),record=meta?await this.get(meta.projectId):null;return record&&!record.deletedAt?record:null}");
+replace(save,"if(skipRestore)saved=null;", "if(skipRestore&&!roomToken)saved=null;if(saved?.sharedPending)saved.dirty=true;");
+replace(save,"this.record.deleted)this.blocked", "this.record.deleted||this.record.deletedAt)this.blocked");
+replace(save,"await this.cacheCurrent();if(this.record.token)this.api.link(this.record.token);", "await this.cacheCurrent();this.lastDeleted=(await this.cache.deleted?.())?.[0]||null;if(this.record.token)this.api.link(this.record.token);");
+replace(save,"structuredClone({...this.record,dirty:this.dirty,updatedAt:Date.now()})", "structuredClone({...this.record,draft:!projectName(this.record.project.name),dirty:this.dirty,updatedAt:Date.now()})");
+const begin=fs.readFileSync(save,'utf8').indexOf(' async remove(id){'),end=fs.readFileSync(save,'utf8').indexOf('\n list(){',begin);
+let s=fs.readFileSync(save,'utf8');s=s.slice(0,begin)+` async remove(id){
+  const selected=this.record?.id===id?this.record:await this.cache.get(id);if(!selected)return false;
+  const key=selected.token||selected.pendingToken,active=this.record?.id===id||!!key&&key===(this.record?.token||this.record?.pendingToken);
+  if(active){await this.flush();await this.saving;this.ready=false;this.epoch++;this.live.stop();clearTimeout(this.timer)}
+  await this.cacheQueue;const record=structuredClone(active?this.record:selected);
+  try{
+   const token=record.token||record.pendingToken;
+   if(token&&!record.deleted)try{const result=await this.request('/api/projects/'+token,{method:'DELETE',body:JSON.stringify({revision:record.revision})});record.token=token;record.revision=result.revision}catch(error){if(![404,410].includes(error.status))throw error;record.token=null}
+   record.deletedAt=Date.now();record.dirty=false;delete record.pendingToken;
+   for(const saved of await this.cache.list())if(saved.id===record.id||token&&(saved.token||saved.pendingToken)===token)await this.cache.put({...saved,...record,id:saved.id});
+   await this.cache.put(record);this.lastDeleted=record;
+   if(active){this.record=null;this.dirty=false;this.blocked=null;await this.cache.select(null)}return active;
+  }catch(error){if(active){this.ready=true;this.watch()}if(error.status===409)throw Error('Project changed elsewhere. Open its latest version before deleting.');throw error}
+ }
+ async restoreDeleted(){
+  const old=this.lastDeleted;if(!old)return;let remote;
+  if(old.token)remote=await this.request('/api/projects/'+old.token,{method:'POST',body:JSON.stringify({restore:true,revision:old.revision})});
+  const record={...old,deleted:false,deletedAt:undefined,roomToken:null,dirty:false,...(remote?{project:remote.project,baseProject:remote.project,revision:remote.revision}:{})};
+  await this.cache.put(record);this.lastDeleted=(await this.cache.deleted?.())?.[0]||null;return record.id;
+ }
+`+s.slice(end);fs.writeFileSync(save,s);
+replace(controls,"This cannot be undone.","Undo delete can restore it from this device.");
+replace(controls,"const recovery=document.createElement('div');", "const undo=document.createElement('button');undo.id='undo-project-delete';undo.textContent='Undo delete';undo.hidden=true;dialog.append(undo);\n const recovery=document.createElement('div');");
+replace(controls,"function refresh(){const save=api.getSave(),shared=api.getShared();", "function refresh(){const save=api.getSave(),shared=api.getShared();undo.hidden=!save?.lastDeleted;undo.disabled=busy;");
+replace(controls,"const projects=(await save?.list()||[]).filter", "const projects=(await save?.list()||[]).filter");
+replace(controls,"api.message('Project deleted');await render()", "api.message('Project deleted · Undo delete restores it');await render()");
+replace(controls,"return{refresh,status(text)", "undo.onclick=async()=>{if(busy)return;busy=true;refresh();try{await api.getSave().restoreDeleted();await render();api.message('Project restored')}catch(error){api.message(error.message)}finally{busy=false;refresh()}};\n return{refresh,status(text)");
+replace('dist/shared.mjs',"if(this.api.busy()||this.pending){this.incoming=room;return false}","if(this.api.busy()||this.pending){this.incoming=room;this.api.status?.('Changes waiting…');return false}");
+replace(app,"function projectBusy(){return !!gesture", "function projectBusy(){return !!document.activeElement?.matches?.('#inspector input,#inspector select')||!!gesture");
+// Browser async rendering should be awaited, not checked synchronously.
+replace('tests/project-lifecycle-browser.test.mjs',"assert.ok(await remove.isVisible());", "await remove.waitFor({state:'visible'});assert.ok(await remove.isVisible());");
+replace('tests/project-lifecycle-browser.test.mjs',"assert.deepEqual(errors,[]);", "await page.click('#undo-project-delete');await page.waitForFunction(()=>document.querySelectorAll('.project-row').length===1);assert.equal((await fetch(origin+'/api/projects/'+projectToken)).status,200);assert.deepEqual(errors,[]);");
+replace('tests/project-lifecycle.test.mjs',"async list(){return [...this.data.values()].map(p=>structuredClone(p))}","async list(){return [...this.data.values()].filter(p=>!p.deletedAt&&!p.draft).map(p=>structuredClone(p))}\n async deleted(){return [...this.data.values()].filter(p=>p.deletedAt).sort((a,b)=>b.deletedAt-a.deletedAt)}");
+replace('tests/project-lifecycle.test.mjs',"['deleted','revision']);", "['deleted','recoveryKey','revision']);");
+replace('tests/project-lifecycle.test.mjs',"assert.equal(await cache.get(id),undefined);assert.equal(save.record,null);", "assert.ok((await cache.get(id)).deletedAt);assert.equal((await cache.list()).length,0);assert.equal(save.record,null);await save.restoreDeleted();assert.equal((await cache.list()).length,1);");
+// Retain the parallel main branch's browser scenario, with the new native
+// confirmation and streaming connection (networkidle is inappropriate for SSE).
+const browser='tests/artwork-browser.test.mjs';
+replace(browser,"await page.locator('#sync-status').innerText()==='Live'", "/^Live/.test(await page.locator('#sync-status').innerText())");
+replace(browser,"page.reload({waitUntil:'networkidle'})", "page.reload({waitUntil:'domcontentloaded'})");
+replace(browser,"await page.locator('.delete-project').click();assert.equal(await page.locator('.delete-project').innerText(),'Delete?');await page.locator('.delete-project').click();", "page.once('dialog',dialog=>dialog.accept());await page.locator('.project-delete').click();");
+// Keep both sets of regression coverage; use a real canonical room capability
+// rather than attaching an arbitrary, nonexistent token in the legacy test.
+const legacy='tests/project-lifecycle-legacy.test.mjs';
+replace(legacy,"async put(k,text,{onlyIf}={})", "async delete(keys){for(const k of Array.isArray(keys)?keys:[keys])this.data.delete(k)}async put(k,text,{onlyIf}={})");
+replace(legacy,"const roomToken='a'.repeat(64);await save.bindRoom(roomToken);await save.flush();const cloud=await (await fetch('/api/projects/'+token)).json();", "const linked=await (await fetch('/api/rooms',{method:'POST',body:JSON.stringify({projectToken:token,revision:save.record.revision})})).json();const roomToken=linked.token;await save.pull();const cloud=await (await fetch('/api/projects/'+token)).json();");
+replace(legacy,"await reopened.init({roomToken,skipRestore:true});", "await reopened.init({roomToken});t.after(()=>{save.stop();reopened.stop()});");
+replace(legacy,"assert.equal(response.status,409);", "assert.equal(response.status,410);");
+replace(legacy,"assert.equal(statuses.at(-1),'Live');", "assert.match(statuses.at(-1),/^Live/);");
+console.log('Reconciled main and retained reversible deletion.');
