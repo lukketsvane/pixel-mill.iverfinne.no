@@ -37,7 +37,7 @@ export class SharedLevel{
   if(missing){if(!this.token)throw Error('Missing image source. Reconnect the agent session.');const fresh=await this.request('/api/rooms/'+this.token);if(ticket===this.acceptSequence&&epoch===this.epoch)return this.accept(fresh);return}
   const visualChanged=JSON.stringify(previous.objects)!==JSON.stringify(room.project.objects)||JSON.stringify(previous.spawn)!==JSON.stringify(room.project.spawn)||[...sharedVisualAssets(room.project)].some(id=>{const old=cache.get(id),current=room.project.assets.find(asset=>asset.id===id);return old?.src!==current?.src||JSON.stringify(old?.spriteSheet)!==JSON.stringify(current?.spriteSheet)});
   this.revision=room.revision;this.canUndo=room.canUndo;
-  if(this.api.busy()||this.pending){this.incoming=room;return false}
+  if(this.api.busy()||this.pending){this.incoming=room;this.api.status?.('Changes waiting…');return false}
   const guard=()=>ticket===this.acceptSequence&&epoch===this.epoch&&room.revision>=this.revision&&!this.pending&&!this.paused;
   if(await this.api.apply(room.project,{guard,remote:true})===false){if(guard())this.incoming=room;return false}
   if(!guard())return false;

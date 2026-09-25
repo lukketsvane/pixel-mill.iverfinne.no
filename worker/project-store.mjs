@@ -2,16 +2,16 @@ import {requireProjectName} from '../dist/project-state.mjs';
 export const PROJECT_TTL=7*86400000;
 export const privateToken=()=>Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
 export function projectError(message,status){return Object.assign(Error(message),{status})}
-export function assertStoredProject(record){if(!record||record.deleted)throw projectError('Project was deleted. Your local work is kept.',410)}
+export function assertStoredProject(record){if(!record||record.deleted||record.deletedAt)throw projectError('Project was deleted. Your local work is kept.',410)}
 // Project and MCP capabilities resolve to ONE revisioned record. Existing
 // rooms are adopted with an alias, never by copying a potentially stale image.
-export async function resolveProject(bucket,entryKey){
+export async function resolveProject(bucket,entryKey,{allowDeleted=false}={}){
  const entry=await bucket.get(entryKey);
  if(!entry)throw projectError('Project or agent link not found.',404);
- const alias=await entry.json();assertStoredProject(alias);
+ const alias=await entry.json();if(!allowDeleted)assertStoredProject(alias);
  const key=alias.ref||entryKey,object=alias.ref?await bucket.get(key):entry;
  if(!object)throw projectError('Project was deleted.',410);
- const record=alias.ref?await object.json():alias;assertStoredProject(record);
+ const record=alias.ref?await object.json():alias;if(!allowDeleted)assertStoredProject(record);
  return{key,object,record};
 }
 export function assertRoomAccess(record,token){

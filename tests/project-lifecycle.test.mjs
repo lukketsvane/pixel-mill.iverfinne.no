@@ -17,7 +17,8 @@ class Cache{
  constructor(){this.data=new Map()}
  async get(id){return structuredClone(this.data.get(id))}
  async put(p){this.data.set(p.id,structuredClone(p))}
- async list(){return [...this.data.values()].map(p=>structuredClone(p))}
+ async list(){return [...this.data.values()].filter(p=>!p.deletedAt&&!p.draft).map(p=>structuredClone(p))}
+ async deleted(){return [...this.data.values()].filter(p=>p.deletedAt).sort((a,b)=>b.deletedAt-a.deletedAt)}
  async active(){return this.get(this.selected)}
  async select(id){this.selected=id}
  async remove(id){this.data.delete(id);if(this.selected===id)this.selected=null}
@@ -62,7 +63,7 @@ test('deletion checks the revision, removes project bytes and cannot be undone b
  await json(await call(path,'DELETE',{revision:room.revision}));assert.equal((await call(path)).status,410);assert.equal((await call('/api/rooms/'+room.token)).status,410);
  assert.equal((await call(path,'PUT',{revision:room.revision,project:base('Resurrect')})).status,410);assert.equal((await call('/api/projects','POST',{token:saved.token,project:base('Retry')})).status,410);
  assert.equal(await env.BUCKET.put(key,prior.text,{onlyIf:{etagMatches:prior.etag}}),null);
- assert.deepEqual(Object.keys(JSON.parse(env.BUCKET.data.get(key).text)).sort(),['deleted','revision']);
+ assert.deepEqual(Object.keys(JSON.parse(env.BUCKET.data.get(key).text)).sort(),['deleted','recoveryKey','revision']);
 });
 
 test('unnamed drafts remain local; offline deletion preserves recovery and successful deletion removes it',async t=>{
@@ -72,7 +73,7 @@ test('unnamed drafts remain local; offline deletion preserves recovery and succe
  await save.init();save.changed();await save.flush();assert.equal(env.BUCKET.data.size,0);assert.equal(save.record.token,null);assert.equal(cache.data.size,1);
  state.name='Named draft';save.changed();await save.flush();const id=save.record.id;assert.ok(save.record.token);assert.equal(save.dirty,false);
  offline=true;await assert.rejects(save.remove(id),/offline/);assert.ok(await cache.get(id));assert.equal(save.ready,true);
- offline=false;assert.equal(await save.remove(id),true);assert.equal(await cache.get(id),undefined);assert.equal(save.record,null);
+ offline=false;assert.equal(await save.remove(id),true);assert.ok((await cache.get(id)).deletedAt);assert.equal((await cache.list()).length,0);assert.equal(save.record,null);await save.restoreDeleted();assert.equal((await cache.list()).length,1);
 });
 
 test('a saved editor receives remote updates, defers during a gesture and never silently forks a conflict',async t=>{

@@ -40,10 +40,10 @@ test('browser: named mobile projects stay live across GPT edits, reopen and conf
  await page.waitForFunction(()=>document.querySelector('#project-name').value==='GPT changed',{},{timeout:6000});
  await page.click('#menu-button');const downloading=page.waitForEvent('download');await page.click('#save');const download=await downloading;const exported=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.equal(exported.name,'GPT changed');assert.ok(exported.objects.some(o=>o.id==='live-floor'));
  const second=await context.newPage();second.on('pageerror',error=>errors.push(error.message));await second.goto(origin+'/#project='+projectToken);await second.waitForFunction(()=>!document.querySelector('#app').inert&&document.querySelector('#project-name').value==='GPT changed');
- await page.click('#menu-button');await page.click('#projects-button');const remove=page.getByRole('button',{name:'Delete GPT changed',exact:true}).first();assert.ok(await remove.isVisible());const rect=await remove.boundingBox();assert.ok(rect.width>=44&&rect.height>=44);
+ await page.click('#menu-button');await page.click('#projects-button');const remove=page.getByRole('button',{name:'Delete GPT changed',exact:true}).first();await remove.waitFor({state:'visible'});assert.ok(await remove.isVisible());const rect=await remove.boundingBox();assert.ok(rect.width>=44&&rect.height>=44);
  page.once('dialog',dialog=>dialog.dismiss());await remove.click();assert.equal((await fetch(origin+'/api/projects/'+projectToken)).status,200);
  await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/project-lifecycle-mobile.png'});
  page.once('dialog',dialog=>dialog.accept());await remove.click();await page.waitForFunction(()=>document.querySelector('#saved-projects').textContent.includes('No saved projects'));
  assert.equal((await fetch(origin+'/api/projects/'+projectToken)).status,410);await second.waitForFunction(()=>/inactive|deleted|unavailable/i.test(document.querySelector('#sync-status').textContent),{},{timeout:6000});
- assert.deepEqual(errors,[]);
+ await page.click('#undo-project-delete');await page.waitForFunction(()=>document.querySelectorAll('.project-row').length===1);assert.equal((await fetch(origin+'/api/projects/'+projectToken)).status,200);assert.deepEqual(errors,[]);
 });

@@ -45,15 +45,29 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
  }
  const match=path.match(/^\/api\/projects\/([a-f0-9]{64})(\/events)?$/);
  if(match){
-  const found=await resolveProject(bucket,'projects/'+await keyFor(match[1])),{key,object,record:saved}=found;saved.projectToken??=match[1];
+  const found=await resolveProject(bucket,'projects/'+await keyFor(match[1]),{allowDeleted:request.method==='POST'}),{key,object,record:saved}=found;saved.projectToken??=match[1];
+  if(request.method==='POST'){
+   const value=await body(request);revisionCheck(saved,value.revision);
+   if(!value.restore||!saved.deleted&&!saved.deletedAt)throw Error('No deleted project to restore.');
+   const backup=saved.recoveryKey?await bucket.get(saved.recoveryKey):null;
+   const original=backup?await backup.json():saved.project?saved:null;
+   if(!original?.project)throw Error('The recovery copy is unavailable.');
+   const next={...original,deleted:false,deletedAt:undefined,recoveryKey:undefined,revision:saved.revision+1,projectToken:match[1],roomToken:null};
+   await writeProject(bucket,key,next,object.etag);if(saved.recoveryKey)await bucket.delete(saved.recoveryKey);
+   return response({restored:true,...publicRoom(next)});
+  }
   if(match[2])return request.method==='GET'?projectEvents(request,bucket,key,found):response({error:'Method not allowed'},405);
   if(request.method==='GET'){if(url.searchParams.get('revision')===String(saved.revision))return response(null,304);return response(publicRoom(saved))}
   if(request.method==='DELETE'){
    const value=await body(request);revisionCheck(saved,value.revision);
    // Conditional tombstone removes the bytes, invalidates every alias and
    // stops already-running saves from resurrecting the deleted project.
-   await writeProject(bucket,key,{deleted:true,revision:saved.revision+1},object.etag);
-   await bucket.delete(key+'/preview');return response({deleted:true});
+   const revision=saved.revision+1,recoveryKey=key+'/deleted/'+privateToken();
+   // Keep an inaccessible recovery copy for explicit Undo delete. The root
+   // tombstone still invalidates every capability and every stale writer.
+   await writeProject(bucket,recoveryKey,saved);
+   try{await writeProject(bucket,key,{deleted:true,revision,recoveryKey},object.etag)}catch(error){await bucket.delete(recoveryKey);throw error}
+   await bucket.delete(key+'/preview');return response({deleted:true,revision});
   }
   if(!['PUT','PATCH'].includes(request.method))return response({error:'Method not allowed'},405);
   const value=await body(request);

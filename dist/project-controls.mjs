@@ -4,21 +4,22 @@ export function installProjectControls(api){
  const $=selector=>document.querySelector(selector),list=$('#saved-projects'),dialog=$('#projects-dialog');
  const indicator=document.createElement('span');indicator.id='sync-status';indicator.setAttribute('role','status');indicator.setAttribute('aria-live','polite');$('#app').append(indicator);
  let busy=false;
+ const undo=document.createElement('button');undo.id='undo-project-delete';undo.textContent='Undo delete';undo.hidden=true;dialog.append(undo);
  const recovery=document.createElement('div');recovery.className='project-recovery';
  const explanation=document.createElement('p');explanation.textContent='Your local changes are kept. Save them as a new project, or load the latest cloud version.';
  const copy=document.createElement('button');copy.textContent='Save local as new project';
  const latest=document.createElement('button');latest.textContent='Load latest cloud version';
  recovery.append(explanation,copy,latest);
- function refresh(){const save=api.getSave(),shared=api.getShared();recovery.hidden=!(save?.blocked||shared?.paused);latest.disabled=!save?.record?.token||busy;copy.disabled=busy;indicator.hidden=!indicator.textContent}
+ function refresh(){const save=api.getSave(),shared=api.getShared();undo.hidden=!save?.lastDeleted;undo.disabled=busy;recovery.hidden=!(save?.blocked||shared?.paused);latest.disabled=!save?.record?.token||busy;copy.disabled=busy;indicator.hidden=!indicator.textContent}
  async function openProject(p){
   if(busy)return;busy=true;refresh();api.prepare();
   try{await api.leave();const save=api.getSave();await save.load(p.id);const token=save.record?.roomToken;if(token&&!save.dirty&&!save.blocked)try{await api.getShared().connect(token)}catch(error){api.getShared().detach();api.message(error.message)}api.opened();dialog.close()}
   catch(error){api.message(error.message)}finally{busy=false;refresh()}
  }
  async function deleteProject(p){
-  if(busy||!window.confirm('Delete “'+(projectName(p.project.name)||'Unsaved draft')+'”? This removes the saved project and revokes its agent link. This cannot be undone.'))return;
+  if(busy||!window.confirm('Delete “'+(projectName(p.project.name)||'Unsaved draft')+'”? This removes the saved project and revokes its agent link. Undo delete can restore it from this device.'))return;
   busy=true;refresh();api.prepare();const save=api.getSave(),shared=api.getShared();
-  try{await shared.queue;const active=await save.remove(p.id);if(active)await api.reset();api.message('Project deleted');await render()}
+  try{await shared.queue;const active=await save.remove(p.id);if(active)await api.reset();api.message('Project deleted · Undo delete restores it');await render()}
   catch(error){api.message(error.message,7000)}finally{busy=false;refresh()}
  }
  async function render(){
@@ -48,5 +49,6 @@ export function installProjectControls(api){
    if(save.record.roomToken)await api.getShared().connect(save.record.roomToken);api.opened();await render();api.message('Latest version loaded · local recovery kept');
   }catch(error){api.message(error.message,7000)}finally{busy=false;refresh()}
  };
+ undo.onclick=async()=>{if(busy)return;busy=true;refresh();try{await api.getSave().restoreDeleted();await render();api.message('Project restored')}catch(error){api.message(error.message)}finally{busy=false;refresh()}};
  return{refresh,status(text){indicator.textContent=text;indicator.dataset.state=/conflict|offline|unavailable|deleted|inactive/i.test(text)?'warning':'synced';refresh()}};
 }

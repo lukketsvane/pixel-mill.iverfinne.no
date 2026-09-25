@@ -180,7 +180,7 @@ refresh();requestAnimationFrame(render);
 // The browser and remote MCP connection use the same state/actions.
 async function applyAgentProject(next,{guard=()=>true,remote=true}={}){const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!projectBusy()&&revision===localRevision&&guard()});if(projectBusy()||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();if(!remote)autosave?.changed()}
 async function previewPNG(){const c=document.createElement('canvas');const scale=Math.min(1,960/canvas.width);c.width=Math.round(canvas.width*scale);c.height=Math.round(canvas.height*scale);const context=c.getContext('2d');context.imageSmoothingEnabled=false;context.drawImage(canvas,0,0,c.width,c.height);return c.toDataURL('image/png')}
-function projectBusy(){return !!gesture||!!numberScrub?.active()||importing||!!adjustBefore||!!opacityBefore||document.activeElement===$('#project-name')&&$('#project-name').value!==(projectName(state.name)||'')}
+function projectBusy(){return !!document.activeElement?.matches?.('#inspector input,#inspector select')||!!gesture||!!numberScrub?.active()||importing||!!adjustBefore||!!opacityBefore||document.activeElement===$('#project-name')&&$('#project-name').value!==(projectName(state.name)||'')}
 function ensureProjectName(){if(projectName(state.name))return true;$('#project').hidden=false;$('#project-name').focus();message('Give the project a name before saving.');return false}
 function saveProject(project){if(ensureProjectName())saveProjectFile(project)}
 function syncStatus(text){$('#save-status').textContent=text;projectControls?.status(text)}
