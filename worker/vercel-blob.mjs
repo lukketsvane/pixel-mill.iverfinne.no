@@ -4,8 +4,10 @@ import {get,put,del,BlobPreconditionFailedError} from '@vercel/blob';
 
 export const blobBucket={
  async get(key){
-  const result=await get(key,{access:'private',useCache:false});
+  const result=await get(key,{access:'private',useCache:false,headers:{'accept-encoding':'identity'}});
   if(!result)return null;
+  // Conditional writes need the strong ETag of the stored bytes, not a compressed response.
+  if(!result.blob.etag||result.blob.etag.startsWith('W/'))throw Error('Storage did not return a strong version tag.');
   return {etag:result.blob.etag,json:async()=>JSON.parse(await new Response(result.stream).text())};
  },
  async put(key,text,options={}){
