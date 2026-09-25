@@ -40,8 +40,27 @@ async function browserHarness(){
 async function png(w,h,color=(x,y)=>[44+(x%16)*3,70+(y%16)*3,112,255]){const pixels=new Uint8Array(w*h*4);for(let y=0;y<h;y++)for(let x=0;x<w;x++)pixels.set(color(x,y),(y*w+x)*4);return dataURL(await encodePNG({w,h,pixels}))}
 const value=result=>result.structuredContent||result;
 async function local(page,name,args={}){return value(await page.evaluate(async({name,args})=>window.pixelMillTools.get(name).execute(args),{name,args}))}
-async function savedProject(page){const download=page.waitForEvent('download');await page.evaluate(()=>document.querySelector('#save').click());const file=await download,stream=await file.createReadStream(),chunks=[];for await(const chunk of stream)chunks.push(chunk);return JSON.parse(Buffer.concat(chunks).toString())}
+async function savedProject(page){const level=await local(page,'get_level');if(level.name==='Untitled')await local(page,'edit_level',{revision:level.revision,operations:[{type:'rename',name:'Browser artwork test'}]});const download=page.waitForEvent('download');await page.evaluate(()=>document.querySelector('#save').click());const file=await download,stream=await file.createReadStream(),chunks=[];for await(const chunk of stream)chunks.push(chunk);return JSON.parse(Buffer.concat(chunks).toString())}
 const geometry=project=>({spawn:project.spawn,objects:project.objects.map(({artwork,...object})=>object),collision:platforms(project.objects)});
+test('browser: naming, live GPT edits, reopen without duplicates, delete and restore', {skip:!process.env.PIXEL_MILL_BROWSER,timeout:90000},async()=>{
+ const h=await browserHarness(),{page}=h;
+ const until=async predicate=>{for(let i=0;i<100;i++){if(await predicate())return;await page.waitForTimeout(100)}throw Error('Browser state did not settle')};
+ const cache=()=>page.evaluate(async()=>{const {ProjectCache}=await import('/autosave.mjs'),c=new ProjectCache();return{active:await c.active(),list:await c.list()}});
+ try{
+  await page.locator('#menu-button').click();await page.locator('#save').click();assert.match(await page.locator('#status').innerText(),/name before saving/);assert.equal((await cache()).list.length,0);assert.equal(h.requests.filter(r=>r.path==='/api/projects'&&r.method==='POST').length,0);
+  await page.locator('#project-name').fill('Live project');await page.locator('#project-name').blur();await until(async()=>!!(await cache()).active?.token);const original=(await cache()).active;
+  await page.locator('#agent-button').click();await page.locator('#agent-connect').click();await until(async()=>!!(await cache()).active?.roomToken);const endpoint=await page.locator('#agent-url').inputValue();await page.locator('#close-agent').click();
+  const rpc=async(name,args={})=>(await(await page.request.post(endpoint,{data:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}}})).json()).result;
+  const initial=(await rpc('get_level')).structuredContent;
+  const edit=await rpc('edit_level',{revision:initial.revision,operations:[{type:'rename',name:'GPT live change'},{type:'block',id:'live-platform',x:0,y:0,width:80,height:16}]});assert.equal(edit.isError,undefined);
+  await until(async()=>(await local(page,'get_level')).objects.some(o=>o.id==='live-platform'));assert.equal((await local(page,'get_level')).name,'GPT live change');await until(async()=>await page.locator('#sync-status').innerText()==='Live');
+  await until(async()=>!(await cache()).active.dirty);await page.reload({waitUntil:'networkidle'});await until(async()=>await page.evaluate(()=>!!window.pixelMillTools?.has('get_level')&&!document.querySelector('#app').inert));
+  assert.equal((await cache()).active.id,original.id);assert.equal((await cache()).list.length,1);assert.equal((await local(page,'get_level')).name,'GPT live change');
+  await page.locator('#menu-button').click();await page.locator('#projects-button').click();await until(async()=>await page.locator('.project-row').count()===1);
+  await page.locator('.delete-project').click();assert.equal(await page.locator('.delete-project').innerText(),'Delete?');await page.locator('.delete-project').click();await until(async()=>await page.locator('.project-row').count()===0);assert.equal((await page.request.get(new URL('/api/projects/'+original.token,page.url()).href)).status(),410);
+  await page.locator('#undo-project-delete').click();await until(async()=>await page.locator('.project-row').count()===1);assert.equal((await page.request.get(new URL('/api/projects/'+original.token,page.url()).href)).status(),200);assert.equal((await cache()).list[0].project.name,'GPT live change');assert.deepEqual(h.errors,[]);
+ }finally{await h.close()}
+});
 async function localArtwork(page,{id,mode,assetId,none=false}={}){
  // Await asynchronous IndexedDB reads explicitly; some Chromium/Playwright combinations
  // treat an async waitForFunction predicate's Promise itself as the truthy result.

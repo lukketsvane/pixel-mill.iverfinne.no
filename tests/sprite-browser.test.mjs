@@ -36,7 +36,7 @@ async function harness(){
 }
 const tool=(page,name,args={})=>page.evaluate(async({name,args})=>{const out=await window.pixelMillTools.get(name).execute(args);return out.structuredContent||out},{name,args});
 async function downloadBytes(page,action){const pending=page.waitForEvent('download');await action();const download=await pending,stream=await download.createReadStream(),parts=[];for await(const part of stream)parts.push(part);return Buffer.concat(parts)}
-async function project(page){return JSON.parse((await downloadBytes(page,()=>page.evaluate(()=>document.querySelector('#save').click()))).toString())}
+async function project(page){const level=await tool(page,'get_level');if(level.name==='Untitled')await tool(page,'edit_level',{revision:level.revision,operations:[{type:'rename',name:'Browser sprite test'}]});return JSON.parse((await downloadBytes(page,()=>page.evaluate(()=>document.querySelector('#save').click()))).toString())}
 async function sheet(page,assetId){return(await tool(page,'inspect_sprite_sheet',{assetId,includeFrames:true})).spriteSheet}
 function entries(buffer){const files=new Map();let p=0;while(buffer.readUInt32LE(p)===0x04034b50){const size=buffer.readUInt32LE(p+18),n=buffer.readUInt16LE(p+26),extra=buffer.readUInt16LE(p+28),name=buffer.subarray(p+30,p+30+n).toString(),start=p+30+n+extra;files.set(name,buffer.subarray(start,start+size));p=start+size}return files}
 async function waitGroups(page,n){await page.waitForFunction(n=>document.querySelectorAll('.sprite-group').length===n,n)}

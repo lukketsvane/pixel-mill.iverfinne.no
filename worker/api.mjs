@@ -1,6 +1,7 @@
 import {designWithAgent,reserveChat} from './chat.mjs';
 import {prepareArtwork,getArtworkRequest,applyArtwork,applyAssetSheet,prepareAssetArtwork,getAssetArtworkRequest,applyAssetArtwork} from '../dist/artwork.mjs';
 import {validateProject} from '../dist/engine.mjs';
+import {requireProjectName} from '../dist/project-name.mjs';
 import {agentTools,editProject,projectInfo,compactProjectInfo,editSummary,projectDiff,applyDiff,simulate,imageProject,spriteSheetProject,inspectSpriteSheet,exportProjectSpriteSheet,getProjectAssetImage,patchSourceHash} from '../dist/agent.mjs';
 const MAX_BYTES=32*1024*1024,TTL=7*86400000;
 const response=(value,status=200,headers={})=>new Response(value===null?null:JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Referrer-Policy':'no-referrer',...headers}});
@@ -73,10 +74,21 @@ export async function agentFetch(request,env){
  try{
   if(path==='/api/projects'&&request.method==='POST'){
    const value=await body(request),project=validateProject(value.project),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),key='projects/'+await keyFor(token);
-   await saveRoom(env.BUCKET,key,{project,revision:0});return response({token,revision:0},201);
+   requireProjectName(project.name);if(value.roomToken!==undefined&&!/^[a-f0-9]{64}$/.test(value.roomToken))throw Error('Invalid room link.');
+   await saveRoom(env.BUCKET,key,{project,revision:0,...(value.roomToken?{roomToken:value.roomToken}:{})});return response({token,revision:0},201);
   }
   const projectMatch=path.match(/^\/api\/projects\/([a-f0-9]{64})$/);
-  if(projectMatch){const key='projects/'+await keyFor(projectMatch[1]),object=await env.BUCKET.get(key);if(!object)return response({error:'Project not found.'},404);const saved=await object.json();if(request.method==='GET')return response(saved);if(request.method!=='PUT')return response({error:'Method not allowed'},405);const value=await body(request);revisionCheck(saved,value.revision);const next={project:validateProject(value.project),revision:saved.revision+1};await saveRoom(env.BUCKET,key,next,object.etag);return response({revision:next.revision})}
+  if(projectMatch){
+   const key='projects/'+await keyFor(projectMatch[1]),object=await env.BUCKET.get(key);if(!object)return response({error:'Project not found.'},404);const saved=await object.json();
+   if(request.method==='GET')return saved.deletedAt?response({error:'Project was deleted. Restore it from the deleting device.'},410):response(saved);
+   if(!['PUT','DELETE','POST'].includes(request.method))return response({error:'Method not allowed'},405);
+   const value=await body(request);revisionCheck(saved,value.revision);
+   if(request.method==='DELETE'){saved.deletedAt=Date.now();saved.revision++;await saveRoom(env.BUCKET,key,saved,object.etag);return response({revision:saved.revision,deleted:true})}
+   if(request.method==='POST'){if(!value.restore||!saved.deletedAt)throw Error('No deleted project to restore.');delete saved.deletedAt;saved.revision++;await saveRoom(env.BUCKET,key,saved,object.etag);return response({revision:saved.revision,restored:true})}
+   if(saved.deletedAt)return response({error:'Project was deleted. Your local copy is kept.'},410);
+   const project=validateProject(value.project);requireProjectName(project.name);if(value.roomToken!==undefined&&!/^[a-f0-9]{64}$/.test(value.roomToken))throw Error('Invalid room link.');
+   const next={project,revision:saved.revision+1,...(value.roomToken||saved.roomToken?{roomToken:value.roomToken||saved.roomToken}:{})};await saveRoom(env.BUCKET,key,next,object.etag);return response({revision:next.revision})
+  }
   if(path==='/api/rooms'&&request.method==='POST'){
    const project=validateProject(await body(request)),token=Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join(''),key=await keyFor(token),room={project,revision:0,history:[],expires:Date.now()+TTL};await saveRoom(env.BUCKET,key,room);return response({token,...publicRoom(room)},201);
   }

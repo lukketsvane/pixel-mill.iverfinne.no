@@ -6,7 +6,7 @@ import {designWithAgent} from '../worker/chat.mjs';
 class Bucket{constructor(){this.map=new Map();this.n=0}async get(k){const v=this.map.get(k);return v?{etag:v.etag,json:async()=>JSON.parse(v.text)}:null}async put(k,text,options={}){const old=this.map.get(k),c=options.onlyIf;if(c?.etagMatches&&old?.etag!==c.etagMatches||c?.etagDoesNotMatch==='*'&&old)return null;const etag=String(++this.n);this.map.set(k,{text,etag});return{etag}}async delete(k){for(const key of Array.isArray(k)?k:[k])this.map.delete(key)}}
 class Cache{constructor(){this.map=new Map()}async put(p){this.map.set(p.id,structuredClone(p))}async get(id){return structuredClone(this.map.get(id))}async list(){return[...this.map.values()]}async select(id){this.id=id}active(){return this.get(this.id)}}
 const empty=()=>({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});
-test('autosave persists to cloud, restores offline edits and forks conflicts without losing either version',async()=>{
+test('autosave preserves offline edits and stops conflicts without duplicate projects',async()=>{
  const env={BUCKET:new Bucket()},cache=new Cache();let project=empty(),online=true;const previous=globalThis.fetch;
  globalThis.fetch=(path,options)=>{if(!online)return Promise.reject(Error('Offline'));return agentFetch(new Request('https://pixel.example'+path,options),env)};
  const api={snapshot:()=>structuredClone(project),restore:async p=>project=structuredClone(p),status(){},link(){}};
@@ -16,7 +16,9 @@ test('autosave persists to cloud, restores offline edits and forks conflicts wit
   online=false;project.name='Offline work';save.changed();await save.flush();assert.equal((await cache.active()).project.name,'Offline work');assert.equal((await cache.active()).dirty,true);
   project=empty();const restored=new Autosave(api,cache);await restored.init({token});await restored.saving;assert.equal(project.name,'Offline work');online=true;await restored.flush();assert.equal(restored.dirty,false);
   const old=await(await fetch('/api/projects/'+token)).json();await fetch('/api/projects/'+token,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({revision:old.revision,project:{...old.project,name:'Other device'}})});
-  project.name='Local preserved';restored.changed();await restored.flush();assert.notEqual(restored.record.token,token);assert.equal((await(await fetch('/api/projects/'+token)).json()).project.name,'Other device');assert.equal((await(await fetch('/api/projects/'+restored.record.token)).json()).project.name,'Local preserved');
+  project.name='Local preserved';restored.changed();await restored.flush();assert.equal(restored.record.token,token);assert.equal(restored.dirty,true);assert.equal((await(await fetch('/api/projects/'+token)).json()).project.name,'Other device');assert.equal((await cache.active()).project.name,'Local preserved');
+  // An explicit new project is allowed; a conflict must never create one silently.
+  await restored.start({...project,name:'Explicit new project'});await restored.flush();assert.notEqual(restored.record.token,token);
   project.name='Committed';restored.changed();project.name='Transient drag preview';await restored.flush();assert.equal((await(await fetch('/api/projects/'+restored.record.token)).json()).project.name,'Committed');
  }finally{globalThis.fetch=previous}
 });
