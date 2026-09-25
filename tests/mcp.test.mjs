@@ -10,10 +10,11 @@ test('MCP Streamable HTTP handshake, reads, atomic edits, stale revisions, undo,
  const created=await call('/api/rooms','POST',base);assert.equal(created.status,201);const room=await created.json(),url='/mcp/'+room.token;let id=0;const rpc=async(method,params)=>{const r=await call(url,'POST',{jsonrpc:'2.0',id:++id,method,params},{Accept:'application/json, text/event-stream'});return(await r.json()).result};
  const init=await rpc('initialize',{protocolVersion:'2025-06-18',capabilities:{},clientInfo:{name:'test',version:'1'}});assert.equal(init.protocolVersion,'2025-06-18');assert.ok(init.capabilities.tools);
  const list=await rpc('tools/list');assert.ok(list.tools.some(t=>t.name==='edit_level'));assert.equal((await call(url)).status,405);
- let info=await rpc('tools/call',{name:'get_level'});assert.equal(info.structuredContent.revision,0);
- let result=await rpc('tools/call',{name:'edit_level',arguments:{revision:0,operations:[{type:'block',id:'floor',x:-100,y:0,width:200,height:12},{type:'spawn',x:0,y:0}]}});assert.equal(result.structuredContent.revision,1);assert.equal(result.structuredContent.objects.length,1);
+ let info=await rpc('tools/call',{name:'get_level'});assert.equal(info.structuredContent.revision,0);assert.equal(info.structuredContent.movement,undefined);assert.equal(info.structuredContent.coordinates,undefined);
+ let result=await rpc('tools/call',{name:'edit_level',arguments:{revision:0,verify:true,operations:[{type:'block',id:'floor',x:-100,y:0,width:200,height:12},{type:'spawn',x:0,y:0}]}});assert.equal(result.structuredContent.revision,1);assert.deepEqual(result.structuredContent.changedIds,['floor']);assert.equal(result.structuredContent.objects.length,1);assert.equal(result.structuredContent.assets,undefined);
  result=await rpc('tools/call',{name:'edit_level',arguments:{revision:0,operations:[{type:'delete',ids:['floor']}]}});assert.equal(result.isError,true);
  result=await rpc('tools/call',{name:'edit_level',arguments:{revision:1,operations:[{type:'rename',name:'bad'},{type:'update',id:'missing',changes:{x:1}}]}});assert.equal(result.isError,true);info=await rpc('tools/call',{name:'get_level'});assert.equal(info.structuredContent.name,'Room');assert.equal(info.structuredContent.revision,1);
+ const full=await rpc('tools/call',{name:'get_level',arguments:{mode:'full'}});assert.ok(full.structuredContent.movement);assert.equal(full.structuredContent.objects[0].id,'floor');
  result=await rpc('tools/call',{name:'simulate_player',arguments:{route:[{seconds:.5,axis:1,run:true}]}});assert.ok(result.structuredContent.end.x>30);assert.equal(result.structuredContent.end.grounded,true);
  const bad=await call(url,'POST',{jsonrpc:'2.0',id:1,method:'tools/list'},{origin:'https://evil.example'});assert.equal(bad.status,403);
  result=await rpc('tools/call',{name:'undo_level',arguments:{revision:1}});assert.equal(result.structuredContent.objects.length,0);assert.equal(result.structuredContent.revision,2);
@@ -32,7 +33,7 @@ test('MCP imports PNG, composes exact sheet, slices frames and undoes the batch'
  const red=dataURL(await encodePNG({w:2,h:2,pixels:Uint8Array.from([255,0,0,255,255,0,0,255,255,0,0,255,255,0,0,255])}));
  let r=await tool('import_image',{revision:0,name:'red',dataUrl:red});assert.equal(r.structuredContent.revision,1);const first=r.structuredContent.assetIds[0];
  r=await tool('import_image',{revision:1,name:'red2',dataUrl:red});assert.equal(r.structuredContent.revision,2);
- r=await tool('create_spritesheet',{revision:2,assetIds:[first,r.structuredContent.assetIds[0]],columns:2,cellWidth:3,cellHeight:3,name:'sheet'});
+ r=await tool('create_spritesheet',{revision:2,assetIds:[first,r.structuredContent.assetIds[0]],columns:2,cellWidth:3,cellHeight:3,name:'sheet',includeImage:true});
  assert.deepEqual([r.structuredContent.width,r.structuredContent.height,r.structuredContent.frames],[6,3,2]);
  assert.equal(r.content[1].type,'image');
  const png=await decodePNG(pngBytes('data:image/png;base64,'+r.content[1].data));assert.equal(png.pixels[3],0);assert.equal(png.pixels[(1*6+0)*4],255);
