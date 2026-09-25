@@ -1,6 +1,30 @@
 # Pixel Mill / Max Level Studio
 
-A full-screen, black-and-white pixel level editor. Starts empty. The original Pixel Mill Site is separate and unchanged.
+A full-screen pixel level editor with two workspaces: **Level** for authoring space, and **Assets** for organizing its visual sources. Starts empty.
+
+## Sketch → artwork
+
+Draw immediately on an empty level. The bottom color circle opens three semantic sketch colors: mint for walkable shapes, blue for background, orange for decoration. Drawing stays active between shapes. Color, semantic role and collision kind are separate properties; applying a visual treatment never changes the authored bounds, rotation, collision inset, spawn or collision kind.
+
+Select references in **Assets**, then choose **Use sheets** to apply existing pixels directly. Environment sheets use their assigned role; a 3 × 3 terrain patch supplies edges, corners and interior tiles, including joined neighboring surfaces. Larger sheets allow choosing the patch on the image. Character animation sheets remain references and are excluded from terrain painting. No image-generation request is made by this action.
+
+**ChatGPT ↗** prepares an immutable handoff and downloads a ZIP containing `clownmap.png`, `request.json`, selected reference PNGs, their structured sheet metadata, and a prompt. Attach it in ChatGPT. A connected agent can instead call `prepare_artwork` / `get_artwork_request` with `includeImages:true` to receive the same map, structure and references together. Generation happens in ChatGPT; the editor does not simulate it or require the site's API key for this route.
+
+Return one coherent PNG with the same framing and aspect ratio. The down-arrow imports it, or the agent calls `apply_artwork` with its request ID and PNG. Pixel Mill maps the result to the original shapes automatically as a separate artwork binding. A changed target layout or source reference is rejected; unrelated edits can continue while generation runs. Select a region with the rectangle control (or Shift-drag) to use the same loop on fully enclosed shapes. Clear the scope to treat the whole level. Requests retain their exact target IDs. Multiple pending requests can be selected when importing a result.
+
+Every application is one undo step. **Restore sketch** removes the treatment while retaining both the editable geometry and source artwork. Save/Open, cloud synchronization and ZIP export preserve the artwork bindings and requests. As with any image generation, visual fidelity to the requested silhouette depends on the returned artwork; the application's geometry and collision invariants are enforced independently.
+
+## Character sheets and animation groups
+
+**+** opens import options with a **16 px** default. Sheet import preserves the full source image, transparent margins and pixel scale. A confident regular grid is grouped immediately; ambiguous images show a detected grid or 16 px suggestion that can be corrected.
+
+An 8 × 8 character sheet is one `sprite_sheet` asset with eight expandable animations and 64 exact frame cells. A cell retains all its disconnected details, repeated poses and empty frames. Groups hold ordered frame references, animation speed, looping and a shared alignment origin. No pose is independently recentered. Environment sheets use the same structure for material sets and tiles.
+
+**Group selected** collects existing assets without creating another stored PNG. **Group level selection** infers rows, columns, empty slots and common spacing from placed sprites at a common scale. These collections retain references to the original source assets. Editing a source updates its containing sheets. Grouping and ungrouping are single undo steps; Undo is available in Assets.
+
+Tap an animation to inspect its frames, rename it, reorder rows or frames, and preview playback in place. Select frames or groups to merge, split or regroup manually. Grid settings allow row/column/manual grouping, cell dimensions, gutters, offsets and empty-cell retention. Export the selected frame, animation strip, full sheet or several sheets as an asset pack. Exports retain original sources, frame order, grouping and animation settings alongside the rendered PNGs.
+
+**Use as reference** attaches the current frame, animation or full sheet to ChatGPT requests. The handoff includes the composed reference image and its hierarchy, frame membership, timing and exact image placements. **ChatGPT ↗** prepares a targeted asset request; **Apply return** imports the returned PNG to replace only those original frame bindings. Generated pixels become a retained source, while the original sheet and other frames remain editable. A selected frame may also guide another animation in the same sheet. Stale target changes are rejected, and applying a result is one undo step.
 
 ## Editing
 
@@ -31,7 +55,7 @@ Browsers with WebMCP support also expose the same tools directly, without requir
 
 ## Development and hosting
 
-Node 22 or later; no package dependencies.
+Node 22 or later. The Vercel adapter uses `@vercel/blob`; editor and Worker logic otherwise use platform APIs.
 
 ```sh
 npm test
@@ -48,3 +72,5 @@ On Vercel, the same-origin `/api/*` and `/mcp/*` routes run in `api/handler.js`,
 `dist/assets/max.png` is the unmodified 256 × 256 embedded player sheet from `lukketsvane/max.iverfinne.no`, retrieved 2026-09-24. Frames are 32 × 32, anchor (16,31), with interpolation disabled. Base movement constants and touch thresholds follow the source game. This is a terrain playtester; gardening, class perks, enemies and inventory are not included. The source game is not modified.
 
 Automated checks cover multi-image import, placement returning to cursor, saving/opening, ZIP export, physics, gesture handoffs and cancellation, proportional resizing, touch stretching, long press, cropping, locks, layer order, opacity, MCP requests, conflicts, undo and revocation. Physical iPhone verification has not been performed.
+
+Artwork and sprite-sheet tests cover real HTTP MCP handoffs, unchanged collision geometry, region isolation, stale-request rejection, direct terrain-sheet reuse, hierarchy persistence, reordered pixel exports and one-step undo. Opt-in Playwright browser verification uses `PIXEL_MILL_BROWSER=1 node --test tests/*browser.test.mjs`; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` if Chromium is outside Playwright's cache. `PIXEL_MILL_GENERATED_IMAGE` accepts a genuine generated PNG for the full live image round trip.
