@@ -1,4 +1,5 @@
 import {validateProject} from '../dist/engine.mjs';
+import {resolveSavedProject} from './legacy-projects.mjs';
 import {applyDiff} from '../dist/agent.mjs';
 import {requireProjectName} from '../dist/project-state.mjs';
 import {privateToken,projectError,assertStoredProject,assertRoomAccess,resolveProject,writeProject,projectEvents,PROJECT_TTL} from './project-store.mjs';
@@ -39,13 +40,13 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
   const token=value.token||privateToken(),key='projects/'+await keyFor(token);
   // The browser persists this random key before sending. A lost response can
   // therefore be retried without creating duplicate saved projects.
-  if(value.token&&await bucket.get(key)){const existing=await resolveProject(bucket,key);return response({token,...publicRoom(existing.record)})}
+  if(value.token&&await bucket.get(key)){const existing=await resolveSavedProject(bucket,keyFor,token);return response({token,...publicRoom(existing.record)})}
   const saved={project,revision:0,history:[],projectToken:token};
   await writeProject(bucket,key,saved);return response({token,...publicRoom(saved)},201);
  }
  const match=path.match(/^\/api\/projects\/([a-f0-9]{64})(\/events)?$/);
  if(match){
-  const found=await resolveProject(bucket,'projects/'+await keyFor(match[1]),{allowDeleted:request.method==='POST'}),{key,object,record:saved}=found;saved.projectToken??=match[1];
+  const found=await resolveSavedProject(bucket,keyFor,match[1],{allowDeleted:request.method==='POST'}),{key,object,record:saved}=found;saved.projectToken??=match[1];
   if(request.method==='POST'){
    const value=await body(request);revisionCheck(saved,value.revision);
    if(!value.restore||!saved.deleted&&!saved.deletedAt)throw Error('No deleted project to restore.');
@@ -82,7 +83,7 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
   const value=await body(request);
   if(value.projectToken){
    if(!/^[a-f0-9]{64}$/.test(value.projectToken))throw Error('Invalid project link.');
-   const found=await resolveProject(bucket,'projects/'+await keyFor(value.projectToken)),room=found.record;
+   const found=await resolveSavedProject(bucket,keyFor,value.projectToken),room=found.record;
    requireProjectName(room.project);revisionCheck(room,value.revision);
    if(room.roomToken&&room.expires>Date.now())return response({token:room.roomToken,...publicRoom(room)});
    const token=privateToken();await writeProject(bucket,await keyFor(token),{ref:found.key});

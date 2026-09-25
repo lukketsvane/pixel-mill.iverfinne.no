@@ -27,9 +27,10 @@ export class Autosave{
   try{all=await this.cache.list();saved=preferredId?await this.cache.get(preferredId):token?all.find(p=>p.token===token):roomToken?all.find(p=>p.roomToken===roomToken):await this.cache.active()}catch{this.warnCache()}
   if(skipRestore&&!roomToken)saved=null;if(saved?.sharedPending)saved.dirty=true;
   try{
-   if(roomToken){remote=await this.request('/api/rooms/'+roomToken);if(!remote.projectToken&&projectName(remote.project.name))remote=await this.request('/api/projects',{method:'POST',body:JSON.stringify({roomToken})});token=remote.projectToken||remote.token||null;saved??=all.find(p=>token&&p.token===token)}
+   if(roomToken){remote=await this.request('/api/rooms/'+roomToken);if(!remote.projectToken&&saved?.token)remote=await this.request('/api/projects/'+saved.token);else if(!remote.projectToken&&projectName(remote.project.name))remote=await this.request('/api/projects',{method:'POST',body:JSON.stringify({roomToken})});token=remote.projectToken||remote.token||null;saved??=all.find(p=>token&&p.token===token)}
    else if(token||saved?.token){token=token||saved.token;remote=await this.request('/api/projects/'+token)}
   }catch(error){if(!saved)throw error;if([404,410].includes(error.status)){saved.deleted=true;this.blocked='Project deleted · recovery kept'}else this.status('Cached · offline')}
+  if(remote?.projectToken)token=remote.projectToken;
   if(remote&&!saved?.dirty)saved={...(saved||{}),id:saved?.id||crypto.randomUUID(),token:token||null,roomToken:remote.roomToken||roomToken||null,revision:remote.revision,project:remote.project,baseProject:remote.project,dirty:false,deleted:false,updatedAt:Date.now()};
   this.record=saved||{id:crypto.randomUUID(),token:null,revision:0,project:this.api.snapshot(),dirty:false,updatedAt:Date.now()};
   if(this.record.deleted||this.record.deletedAt)this.blocked='Project deleted · recovery kept';

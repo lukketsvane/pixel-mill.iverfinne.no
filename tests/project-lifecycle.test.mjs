@@ -104,3 +104,16 @@ test('live client retries deferred drawing updates and ignores events from an ol
  live.start('/api/projects/first');sources[0].events.change({data:JSON.stringify({revision:2})});await live.inflight;assert.equal(live.deferred,true);await new Promise(resolve=>setTimeout(resolve,420));assert.equal(revision,2);
  const oldSource=sources[0];live.start('/api/projects/second');const count=calls;oldSource.events.change({data:'{"revision":99}'});await Promise.resolve();assert.equal(calls,count);assert.equal(oldSource.closed,true);live.stop();assert.equal(sources[1].closed,true);
 });
+
+test('legacy separate saved snapshots resolve to live room state without forking or losing the old recovery',async()=>{
+ const {call,env}=harness();const room=await json(await call('/api/rooms','POST',base('Current room')),201);
+ const saved=await json(await call('/api/projects','POST',{project:base('Old saved snapshot')}),201),path='/api/projects/'+saved.token;
+ const key=[...env.BUCKET.data.keys()].find(k=>k.startsWith('projects/'));
+ await env.BUCKET.put(key,JSON.stringify({project:base('Old saved snapshot'),revision:4,roomToken:room.token}));
+ let current=await json(await call(path));assert.equal(current.project.name,'Current room');assert.equal(current.projectToken,saved.token);assert.equal(current.roomToken,room.token);
+ assert.equal(JSON.parse(env.BUCKET.data.get(key).text).project.name,'Old saved snapshot');
+ const changed=await json(await call('/mcp/'+room.token,'POST',{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'edit_level',arguments:{revision:current.revision,operations:[{type:'rename',name:'Live after migration'}]}}}));assert.equal(changed.result.isError,undefined);
+ current=await json(await call(path));assert.equal(current.project.name,'Live after migration');
+ const deleted=await json(await call(path,'DELETE',{revision:current.revision}));assert.equal((await call(path)).status,410);assert.equal((await call('/api/rooms/'+room.token)).status,410);
+ await json(await call(path,'POST',{restore:true,revision:deleted.revision}));assert.equal((await json(await call(path))).project.name,'Live after migration');assert.equal((await call('/api/rooms/'+room.token)).status,410);
+});
