@@ -1,0 +1,38 @@
+name: Integrate project lifecycle
+on:
+  push:
+    branches: [fix/project-lifecycle-live-sync]
+    paths:
+      - scripts/apply-project-lifecycle.mjs
+      - .github/workflows/lifecycle-integration.yml
+permissions:
+  contents: write
+concurrency:
+  group: project-lifecycle-integration
+  cancel-in-progress: false
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/project-lifecycle-live-sync
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: node scripts/apply-project-lifecycle.mjs
+      - name: Commit generated source integration
+        run: |
+          git config user.name 'Pixel Mill integration'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add dist worker scripts/build.mjs tests vercel.json
+          if ! git diff --cached --quiet; then
+            git commit -m 'Integrate named projects, deletion and live editor state'
+            git push origin HEAD:fix/project-lifecycle-live-sync
+          fi
+      - run: npm ci
+      - run: npm test
+        timeout-minutes: 2
+      - run: npm run build
