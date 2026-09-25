@@ -52,7 +52,7 @@ Use `apply_asset_sheet` when suitable pixels already exist. It neither generates
 
 ## Editable sheet hierarchy
 
-`group_sprite_sheet` keeps the original PNG and adds a character/environment sheet containing groups and stable frames. Supply exact `cellWidth` and `cellHeight` for known layouts; otherwise conservative detection proposes a grid. Row grouping is the default. Column and manual grouping are supported. Blank frames are retained by default, including their row/column positions.
+`group_sprite_sheet` keeps the original PNG and adds a character/environment sheet containing groups and stable frames. Omit slicing settings to recognize the image automatically: repeated poses become animation rows, while mixed-size regions become an environment atlas. Recognition tolerates flat-background JPEG noise and uneven spacing. Legacy numeric overrides remain available for exact known grids. Row grouping is the default. Column and manual grouping are supported. Blank frames are retained by default, including their row/column positions.
 
 `inspect_sprite_sheet` returns groups and frame IDs without source bytes or every frame rectangle; `includeFrames: true` exposes precise source rectangles, and `includeImage: true` includes the source PNG. `edit_sprite_sheet` batches operations such as `rename_group`, `reorder_groups`, `reorder_frames`, `merge_groups`, `split_group`, and `group_frames` without changing the original image. `export_sprite_sheet` returns the arranged full sheet or a chosen `groupId` or `frameId` as an exact PNG. Each sheet edit is one reversible operation.
 
@@ -62,7 +62,7 @@ Use `apply_asset_sheet` when suitable pixels already exist. It neither generates
 
 `ungroup_sprite_sheet` releases source sprites in one undo step; a virtual parent still used by the level is rejected. `edit_sprite_sheet` additionally supports `group_settings` with `fps`, `loop` and common `origin`, `replace_frame` with an artwork source rectangle, and `replace_group` with one rectangle per frame. Null replacement restores a frame’s original source. Grouping metadata and animation timing remain editable.
 
-High-confidence grids imported by `import_image` are grouped automatically as one sheet, without slicing into duplicate files. Set `autoGroup: false` for a plain source or `sheetType: "environment"` for an environment sheet. Uncertain grids keep their source intact for inspection and explicit grouping; the starting cell size is 16 px.
+Images imported by `import_image` or the Assets workspace recognize structure automatically, without a grid configuration step or duplicate files. Character sheets retain every frame cell, including detached effects and empty positions. Irregular environment sheets use native source rectangles (`layout: "atlas"`), grouped by spatial rows. Set `autoGroup: false` for a plain source or supply `sheetType` only to override the inferred type. Uncertain images remain whole. Full atlas exports retain original source dimensions; selected regions export at native size. Group, rename, merge, split and undo operate on references to the preserved source. The default tile size for applying environment artwork remains 16 px.
 
 ## Iterate a sheet, group or frame selection
 

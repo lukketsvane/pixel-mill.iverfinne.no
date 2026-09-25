@@ -1,6 +1,7 @@
 import {detectBackground,extractPart,processPixels,safeName,zipStore} from './pixel-core.mjs';
 import {drawObject} from './geometry.mjs';
-import {exportSpriteSheet} from './spritesheets.mjs';
+import {exportSpriteSheet,autoGroupSpriteSheet} from './spritesheets.mjs';
+import {pngHeader,dataURL} from './png.mjs';
 import {bounds,platforms,validateProject} from './engine.mjs';
 export const uid=()=>crypto.randomUUID();
 export async function decode(src){const img=new Image();img.src=src;await img.decode();return img}
@@ -14,8 +15,11 @@ export async function importImages(files,options,onProgress=()=>{}){
   if(w*h>12000000)throw Error('Use images under 12 megapixels.');
   if(options.sheet){
    if(w>4096||h>4096||w*h>4000000)throw Error('Use sheets under 4096 px and four million pixels.');
-   const sheet=imageCanvas(w,h);sheet.getContext('2d').drawImage(img,0,0);
-   assets.push({id:uid(),name:safeName(file.name.replace(/\.[^.]+$/,'')),w,h,src:sheet.toDataURL('image/png'),selectedForGeneration:true,sheet:{tileSize:options.tileSize||16,role:'platform'}});sheet.width=sheet.height=1;continue;
+   let src;if(file.type==='image/png'&&file.size<9_000_000){const bytes=new Uint8Array(await file.arrayBuffer());try{pngHeader(bytes);src=dataURL(bytes)}catch{}}
+   // Retain supported PNG bytes directly, including RGB under transparency.
+   // Other formats are decoded once at their original size, never rescaled.
+   if(!src){const sheet=imageCanvas(w,h);sheet.getContext('2d').drawImage(img,0,0);src=sheet.toDataURL('image/png');sheet.width=sheet.height=1}
+   const original={id:uid(),name:safeName(file.name.replace(/\.[^.]+$/,'')),w,h,src,selectedForGeneration:true,sheet:{tileSize:16,role:'platform'}};onProgress('Recognizing sheet…');assets.push(options.recognize===false?original:await autoGroupSpriteSheet(original));continue;
   }
   const c=imageCanvas(w,h),ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);const data=ctx.getImageData(0,0,w,h).data;c.width=c.height=1;
   const tw=Math.max(1,Math.round(w*options.scale)),th=Math.max(1,Math.round(h*options.scale));if(tw*th>4000000)throw Error('Choose a smaller import scale.');

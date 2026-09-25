@@ -1,4 +1,4 @@
-import {detectSpriteGrid,exportSpriteSheet} from './spritesheets.mjs';
+import {exportSpriteSheet} from './spritesheets.mjs';
 import {download} from './io.mjs';
 import {safeName,zipStore} from './pixel-core.mjs';
 
@@ -11,7 +11,7 @@ const bytes=src=>Uint8Array.from(atob(src.split(',')[1]),c=>c.charCodeAt(0));
 export function installSpriteWorkspace(api){
  const host=api.host||document.querySelector('#sprite-workspace');
  if(!host)return{refresh(){},openProposal(){},getSelection(){return null}};
- let assetId=null,signature=null,source=null,epoch=0,busy=false,proposal=null,proposalOpen=false;
+ let assetId=null,signature=null,source=null,epoch=0,busy=false,proposalOpen=false;
  let selectedFrames=new Set(),selectedGroups=new Set(),lastFrame=null,editor,form,groupList,selectionBar,summary,scopeLabel;
  let expandedGroup=null,playingGroup=null,animationRequest=0,playStarted=0;
  const decodedImages=new Map(),sourceDependencies=new Map();
@@ -28,7 +28,7 @@ export function installSpriteWorkspace(api){
  function sourceFor(asset,frame){const rect=frame.artwork||frame,id=frame.artwork?.asset||frame.sourceAssetId||asset.id;return{source:api.getState().assets.find(a=>a.id===id)||asset,rect}}
  async function sourceImage(asset){let entry=decodedImages.get(asset.id);if(!entry||entry.src!==asset.src){const image=new Image();image.src=asset.src;entry={src:asset.src,promise:image.decode().then(()=>image)};decodedImages.set(asset.id,entry)}return entry.promise}
  async function drawFrame(canvas,asset,frame,group){
-  const ctx=canvas.getContext('2d'),width=asset.spriteSheet.cellWidth,height=asset.spriteSheet.cellHeight;canvas.width=width;canvas.height=height;ctx.imageSmoothingEnabled=false;canvas.dataset.frameId=frame?.id||'';
+  const ctx=canvas.getContext('2d'),native=asset.spriteSheet.type==='environment'&&asset.spriteSheet.layout==='atlas',width=native?frame.w:asset.spriteSheet.cellWidth,height=native?frame.h:asset.spriteSheet.cellHeight;canvas.width=width;canvas.height=height;ctx.imageSmoothingEnabled=false;canvas.dataset.frameId=frame?.id||'';
   if(!frame||!frame.artwork&&!frame.sourceAssetId&&asset.spriteSheet.source==='assets')return;const {source,rect}=sourceFor(asset,frame),ticket=frame.id;try{const image=await sourceImage(source);if(!canvas.isConnected||canvas.dataset.frameId!==ticket)return;ctx.clearRect(0,0,width,height);ctx.drawImage(image,rect.x,rect.y,rect.w,rect.h,rect.offsetX??0,rect.offsetY??0,frame.artwork?(rect.targetW??width):rect.w,frame.artwork?(rect.targetH??height):rect.h);canvas.dataset.originX=String(group?.origin?.x??0);canvas.dataset.originY=String(group?.origin?.y??0)}catch(error){if(canvas.isConnected)handleError(error)}
  }
  function animateGroup(asset,group){
@@ -70,35 +70,15 @@ export function installSpriteWorkspace(api){
   if(selectedFrames.size!==1)return;const id=[...selectedFrames][0],group=getAsset().spriteSheet.groups.find(g=>g.frameIds.includes(id));if(!group)return;
   const at=group.frameIds.indexOf(id);if(at===0){tell('Select the first frame of the new group, after frame one.');return}await edit([{type:'split_group',groupId:group.id,at}]);
  }
- function field(label,key,value,min=1,max=4096){
-  const wrap=el('label','sprite-field'),caption=el('span','',label),input=el('input');input.type='number';input.min=min;input.max=max;input.step=1;input.value=value;input.name=key;input.setAttribute('aria-label',label);input.oninput=()=>updateGridCount();wrap.append(caption,input);return wrap;
- }
  function selectField(label,key,options,value){const wrap=el('label','sprite-field'),input=el('select');input.name=key;input.setAttribute('aria-label',label);for(const [id,name]of options){const option=el('option','',name);option.value=id;input.append(option)}input.value=value;wrap.append(el('span','',label),input);return wrap}
- function formArgs(){const data=new FormData(form),num=key=>Number(data.get(key));return{cellWidth:num('cellWidth'),cellHeight:num('cellHeight'),gutterX:num('gutterX'),gutterY:num('gutterY'),marginX:num('marginX'),marginY:num('marginY'),grouping:data.get('grouping'),sheetType:data.get('sheetType'),preserveEmpty:form.elements.preserveEmpty.checked}}
- function updateGridCount(){
-  if(!form)return;const asset=getAsset(),args=formArgs();if(!asset)return;
-  const cols=Math.max(0,Math.floor((asset.w-args.marginX+args.gutterX)/(args.cellWidth+args.gutterX))),rows=Math.max(0,Math.floor((asset.h-args.marginY+args.gutterY)/(args.cellHeight+args.gutterY)));
-  form.querySelector('[data-grid-count]').textContent=`${cols} columns × ${rows} rows`;
- }
- function renderProposal(asset,detected){
-  form=el('form','sprite-grid-form');const existing=asset.spriteSheet;
-  const title=el('div','sprite-proposal-title',existing?'Grid & grouping':'Group this sheet');
-  if(existing)title.append(button('×','Close grid settings',()=>{proposalOpen=false;render(asset)}));form.append(title);
-  const cells=el('div','sprite-field-pair');cells.append(field('Cell width','cellWidth',detected.cellWidth),field('Cell height','cellHeight',detected.cellHeight));form.append(cells);
-  const count=el('output','sprite-grid-count');count.dataset.gridCount='';form.append(count);
-  const selectors=el('div','sprite-field-pair');selectors.append(selectField('Group','grouping',[['row','By row'],['column','By column'],['manual','Manual selection']],detected.grouping||'row'),selectField('Sheet','sheetType',[['character','Character'],['environment','Environment']],detected.sheetType||detected.type||'character'));form.append(selectors);
-  const spacing=el('details','sprite-spacing'),spacingTitle=el('summary','','Spacing');spacing.append(spacingTitle);
-  const gutters=el('div','sprite-field-pair');gutters.append(field('Gutter X','gutterX',detected.gutterX||0,0),field('Gutter Y','gutterY',detected.gutterY||0,0));
-  const margins=el('div','sprite-field-pair');margins.append(field('Offset X','marginX',detected.marginX||0,0),field('Offset Y','marginY',detected.marginY||0,0));spacing.append(gutters,margins);form.append(spacing);
-  const empty=el('label','sprite-keep-empty'),checkbox=el('input');checkbox.type='checkbox';checkbox.name='preserveEmpty';checkbox.checked=detected.preserveEmpty!==false;empty.append(checkbox,el('span','','Keep empty cells'));form.append(empty);
-  if(existing)form.append(el('p','sprite-note','Changing the grid rebuilds groups. Undo restores your previous grouping.'));
-  const confirm=button(existing?'Update groups':'Create groups','Confirm sprite sheet grouping',()=>{});confirm.type='submit';confirm.className='primary';form.append(confirm);
-  form.onsubmit=async event=>{event.preventDefault();if(!form.reportValidity())return;const args=formArgs();confirm.disabled=true;const ok=await mutate('group_sprite_sheet',args);if(ok){proposalOpen=false;proposal=null;selectedFrames.clear();selectedGroups.clear();expandedGroup=null;render(getAsset());tell('Sheet grouped · original image preserved')}else confirm.disabled=false};
-  editor.append(form);updateGridCount();
- }
- async function detect(asset){
-  const ticket=++epoch;editor.replaceChildren(el('p','sprite-note','Finding rows and frames…'));
-  try{const found=await detectSpriteGrid(asset);if(ticket!==epoch||asset.id!==getAsset()?.id)return;proposal=found;editor.replaceChildren();renderProposal(asset,found)}catch(error){if(ticket!==epoch)return;handleError(error);proposal={cellWidth:16,cellHeight:16,grouping:'row',sheetType:'character',preserveEmpty:true};editor.replaceChildren();renderProposal(asset,proposal)}
+ function renderOrganization(asset){
+  const sheet=asset.spriteSheet;form=el('form','sprite-organize-form');
+  const title=el('div','sprite-proposal-title','Organize');title.append(button('×','Close organization',()=>{proposalOpen=false;render(asset)}));form.append(title);
+  const selectors=el('div','sprite-field-pair');selectors.append(selectField('Group','grouping',[['row','By row'],['column','By column'],['manual','Manual selection']],sheet.grouping),selectField('Sheet','sheetType',[['character','Character'],['environment','Environment']],sheet.type));form.append(selectors);
+  form.append(el('p','sprite-note','Source bounds stay intact. Select frames or groups to merge or split them.'));
+  const confirm=button('Update groups','Confirm sprite sheet grouping',()=>{});confirm.type='submit';confirm.className='primary';form.append(confirm);
+  form.onsubmit=async event=>{event.preventDefault();const data=new FormData(form);confirm.disabled=true;const ok=await mutate('group_sprite_sheet',{grouping:data.get('grouping'),sheetType:data.get('sheetType')});if(ok){proposalOpen=false;selectedFrames.clear();selectedGroups.clear();expandedGroup=null;render(getAsset());tell('Grouping updated · Undo to restore')}else confirm.disabled=false};
+  editor.append(form);
  }
  function frameButton(asset,frame,group){
   const b=button('',`${group.name}, frame ${group.frameIds.indexOf(frame.id)+1}${frame.empty?', empty':''}`,event=>chooseFrame(frame.id,group.id,event.shiftKey));
@@ -107,19 +87,19 @@ export function installSpriteWorkspace(api){
   const number=el('small','',String(group.frameIds.indexOf(frame.id)+1));b.append(number);if(frame.empty)b.classList.add('empty');return b;
  }
  function renderGroups(asset){
-  const sheet=asset.spriteSheet,frames=new Map(sheet.frames.map(f=>[f.id,f]));groupList=el('div','sprite-groups');
+  const sheet=asset.spriteSheet,environment=sheet.type==='environment',frames=new Map(sheet.frames.map(f=>[f.id,f]));groupList=el('div','sprite-groups');
   sheet.groups.forEach((group,index)=>{
    const opened=expandedGroup===group.id,card=el('section','sprite-group'),head=el('div','sprite-group-head'),check=el('input');card.dataset.groupId=group.id;card.dataset.expanded=String(opened);check.type='checkbox';check.dataset.groupCheck=group.id;check.checked=selectedGroups.has(group.id);check.setAttribute('aria-label',`Select group ${group.name}`);check.onchange=()=>{selectedFrames.clear();check.checked?selectedGroups.add(group.id):selectedGroups.delete(group.id);updateSelection()};
    const stage=el('canvas','sprite-animation-preview');stage.dataset.animationGroup=group.id;stage.setAttribute('aria-label',`${group.name} animation preview`);const first=frames.get(group.frameIds[0]);queueMicrotask(()=>void drawFrame(stage,asset,first,group));
-   const open=button('',opened?`Close ${group.name} frames`:`Open ${group.name} frames`,()=>{expandedGroup=opened?null:group.id;selectedGroups.clear();render(asset)});open.className='sprite-group-open';open.setAttribute('aria-expanded',String(opened));open.append(stage,el('span','',group.name),el('small','',`${group.frameIds.length} frames`));
-   const play=button(playingGroup===group.id?'Ⅱ':'▶',`${playingGroup===group.id?'Pause':'Play'} ${group.name}`,()=>playGroup(asset,group));play.dataset.playGroup=group.id;play.setAttribute('aria-pressed',String(playingGroup===group.id));play.className='sprite-play';play.disabled=!group.frameIds.length;head.append(check,open,play);card.append(head);
+   const open=button('',opened?`Close ${group.name} frames`:`Open ${group.name} frames`,()=>{expandedGroup=opened?null:group.id;selectedGroups.clear();render(asset)});open.className='sprite-group-open';open.setAttribute('aria-expanded',String(opened));open.append(stage,el('span','',group.name),el('small','',`${group.frameIds.length} ${environment?'assets':'frames'}`));
+   const play=button(playingGroup===group.id?'Ⅱ':'▶',`${playingGroup===group.id?'Pause':'Play'} ${group.name}`,()=>playGroup(asset,group));play.dataset.playGroup=group.id;play.setAttribute('aria-pressed',String(playingGroup===group.id));play.className='sprite-play';play.disabled=!group.frameIds.length;head.append(check,open);if(!environment)head.append(play);card.append(head);
    if(!opened){groupList.append(card);return}
    const settings=el('div','sprite-group-settings');
    const name=el('input');name.value=group.name;name.maxLength=80;name.setAttribute('aria-label',`Name of group ${index+1}`);name.onchange=()=>{const value=name.value.trim();if(value&&value!==group.name)void edit([{type:'rename_group',groupId:group.id,name:value}]);else name.value=group.name};
    const up=button('↑',`Move ${group.name} earlier`,()=>moveGroup(group.id,-1)),down=button('↓',`Move ${group.name} later`,()=>moveGroup(group.id,1));up.disabled=index===0;down.disabled=index===sheet.groups.length-1;settings.append(name,up,down);card.append(settings);
    const playback=el('div','sprite-playback-settings'),fpsLabel=el('label','','fps'),fps=el('input');fps.type='number';fps.min=1;fps.max=60;fps.value=group.fps||8;fps.setAttribute('aria-label',`${group.name} frames per second`);fps.onchange=()=>{if(fps.checkValidity())void edit([{type:'group_settings',groupId:group.id,fps:Number(fps.value)}])};fpsLabel.append(fps);
-   const loopLabel=el('label','','Loop'),loop=el('input');loop.type='checkbox';loop.checked=group.loop!==false;loop.setAttribute('aria-label',`${group.name} loop animation`);loop.onchange=()=>void edit([{type:'group_settings',groupId:group.id,loop:loop.checked}]);loopLabel.append(loop);playback.append(fpsLabel,loopLabel);card.append(playback);
-   const strip=el('div','sprite-frame-strip');strip.setAttribute('aria-label',`${group.name} frames`);for(const id of group.frameIds){const frame=frames.get(id);if(frame)strip.append(frameButton(asset,frame,group))}
+   const loopLabel=el('label','','Loop'),loop=el('input');loop.type='checkbox';loop.checked=group.loop!==false;loop.setAttribute('aria-label',`${group.name} loop animation`);loop.onchange=()=>void edit([{type:'group_settings',groupId:group.id,loop:loop.checked}]);loopLabel.append(loop);playback.append(fpsLabel,loopLabel);if(!environment)card.append(playback);
+   const strip=el('div',environment?'sprite-frame-strip sprite-asset-grid':'sprite-frame-strip');strip.setAttribute('aria-label',`${group.name} frames`);for(const id of group.frameIds){const frame=frames.get(id);if(frame)strip.append(frameButton(asset,frame,group))}
    card.append(strip);groupList.append(card);
   });
   selectionBar=el('div','sprite-selection-tools');selectionBar.hidden=true;const count=el('span');count.dataset.selectionCount='';selectionBar.append(count);
@@ -155,15 +135,15 @@ export function installSpriteWorkspace(api){
   epoch++;globalThis.cancelAnimationFrame?.(animationRequest);host.replaceChildren();form=null;groupList=null;selectionBar=null;scopeLabel=null;if(!asset){host.style.removeProperty('--sprite-source');stopAnimation();return}
   editor=el('div','sprite-editor');host.append(editor);
   const sheet=asset.spriteSheet;
-  if(proposalOpen||!sheet){if(proposal)renderProposal(asset,proposal);else if(sheet)renderProposal(asset,{...sheet,sheetType:sheet.type});else void detect(asset);return}
-  summary=el('div','sprite-sheet-summary');const type=sheet.type==='character'?'Character sheet':'Environment sheet';summary.append(el('strong','',type),el('span','',`${sheet.groups.length} groups · ${sheet.frames.length} frames`));editor.append(summary);
+  if(!sheet){editor.append(el('p','sprite-note','Original image · no slicing applied'),button('Recognize sheet','Recognize sheet structure',async()=>{const ok=await mutate('group_sprite_sheet',{});if(ok&&!getAsset()?.spriteSheet)tell('Kept as one image. No repeated layout or separate assets found.')}));return}if(proposalOpen){renderOrganization(asset);return}
+  summary=el('div','sprite-sheet-summary');const type=sheet.type==='character'?'Character sheet':'Environment sheet';summary.append(el('strong','',type),el('span','',`${sheet.groups.length} ${sheet.type==='character'?'animations':'sets'} · ${sheet.frames.length} ${sheet.type==='character'?'frames':'assets'}`));editor.append(summary);
   const scope=el('div','sprite-scope');scope.append(button('‹ Sheet','Select the whole sprite sheet',clearSelection));scopeLabel=el('output','','Whole sheet');scope.append(scopeLabel);editor.append(scope);
   const context=el('div','sprite-context-actions');
   context.append(button('Use as reference','Use current sprite selection as reference',async()=>{if(busy)return;busy=true;try{const selection=getSelection(),{assetId,...referenceSelection}=selection;await api.mutate(state=>{const a=state.assets.find(entry=>entry.id===assetId);a.selectedForGeneration=true;if(referenceSelection.frameIds||referenceSelection.groupIds)a.referenceSelection=referenceSelection;else delete a.referenceSelection});tell('Reference selected')}catch(error){handleError(error)}finally{busy=false;refresh()}}));
   const chat=button('ChatGPT ↗','Send current sprite selection to ChatGPT',async()=>{if(busy)return;busy=true;chat.disabled=true;try{await api.prepareAssetArtwork(getSelection())}catch(error){handleError(error)}finally{busy=false;chat.disabled=false;refresh()}});chat.disabled=!api.prepareAssetArtwork;context.append(chat);
   const file=el('input');file.type='file';file.accept='image/png';file.hidden=true;file.setAttribute('aria-label','Returned sprite artwork');file.onchange=async()=>{const uploaded=file.files[0];file.value='';if(!uploaded||busy)return;busy=true;try{await api.applyAssetArtwork(uploaded,getSelection());tell('Artwork applied to selection · Undo to restore')}catch(error){handleError(error)}finally{busy=false;refresh()}};
   const apply=button('Apply return','Apply returned artwork to current sprite selection',()=>file.click());apply.disabled=!api.applyAssetArtwork;context.append(apply,file);editor.append(context);
-  const controls=el('div','sprite-sheet-controls');if(sheet.source!=='assets')controls.append(button('Grid & grouping','Edit cell size, spacing and grouping',()=>{proposalOpen=true;proposal={...sheet,sheetType:sheet.type};render(asset)}));
+  const controls=el('div','sprite-sheet-controls');controls.append(button('Organize','Edit sheet grouping',()=>{proposalOpen=true;render(asset)}));
   const exportSelect=el('select');exportSelect.setAttribute('aria-label','Sprite export format');for(const [id,name]of [['sheet','Selection PNG'],['strips','Strips ZIP'],['frames','Frames ZIP'],...(asset.src?[['source','Original PNG']]:[])]){const option=el('option','',name);option.value=id;exportSelect.append(option)}controls.append(exportSelect,button('Export','Export sprite sheet artwork',()=>void exportSheet(exportSelect.value)));editor.append(controls);
   renderGroups(asset);
  }
@@ -171,12 +151,12 @@ export function installSpriteWorkspace(api){
   const asset=getAsset(),id=asset?.id||null,next=JSON.stringify([asset?.spriteSheet||null,asset?.referenceSelection,asset?.selectedForGeneration]);
   const allAssets=new Map(api.getState().assets.map(a=>[a.id,a])),dependencyIds=new Set((asset?.spriteSheet?.frames||[]).flatMap(frame=>[frame.sourceAssetId,frame.artwork?.asset].filter(Boolean))),dependenciesMatch=dependencyIds.size===sourceDependencies.size&&[...dependencyIds].every(id=>sourceDependencies.get(id)===allAssets.get(id)?.src);
   if(assetId===id&&signature===next&&source===asset?.src&&dependenciesMatch)return;
-  if(assetId!==id){assetId=id;selectedFrames.clear();selectedGroups.clear();lastFrame=null;proposal=null;proposalOpen=false;expandedGroup=null;stopAnimation();decodedImages.clear();epoch++}
+  if(assetId!==id){assetId=id;selectedFrames.clear();selectedGroups.clear();lastFrame=null;proposalOpen=false;expandedGroup=null;stopAnimation();decodedImages.clear();epoch++}
   sourceDependencies.clear();for(const id of dependencyIds)sourceDependencies.set(id,allAssets.get(id)?.src);
   signature=next;source=asset?.src;
   if(asset?.spriteSheet){const frameIds=new Set(asset.spriteSheet.frames.map(f=>f.id)),groupIds=new Set(asset.spriteSheet.groups.map(g=>g.id));selectedFrames=new Set([...selectedFrames].filter(id=>frameIds.has(id)));selectedGroups=new Set([...selectedGroups].filter(id=>groupIds.has(id)));if(expandedGroup&&!groupIds.has(expandedGroup))expandedGroup=null}
   render(asset);
  }
  refresh();
- return{refresh,getSelection,clearSelection,openProposal(){proposalOpen=true;proposal=null;const asset=getAsset();if(asset)render(asset)}};
+ return{refresh,getSelection,clearSelection,openProposal(){proposalOpen=true;const asset=getAsset();if(asset)render(asset)}};
 }
