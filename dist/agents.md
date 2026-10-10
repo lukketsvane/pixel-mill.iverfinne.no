@@ -73,3 +73,9 @@ Images imported by `import_image` or the Assets workspace recognize structure au
 Pass a returned PNG to `apply_asset_artwork` using its saved `requestId` and the latest revision. The treatment is stored once beneath its parent and attached to the intended frame IDs automatically. Original raster sources, frame order, grouping, timing, blank cells and unrelated frames remain editable. This is one undo step. Changed target layout rejects stale application. `get_asset_artwork_request` retrieves the saved handoff with metadata only by default.
 
 Routine reads and patches omit image bytes. Metadata-only changes refer to their existing source using a SHA-256 guard, so rename/reorder actions and undo history do not repeatedly store or transmit PNGs. Source changes and additions still retain the pixels required to undo them.
+
+## Ladders and Figma handoff
+
+Use `kind: "ladder"` with `block`, `place` or `update` to create a climbable region. The editor draws rails and rungs for a ladder without an image. Native movement exposes `climb: 42` pixels per second. `simulate_player` route segments accept `climb: -1` to ascend, `0` to hold and `1` to descend; `jump: true` jumps off, and horizontal movement leaves the ladder. Climbing can pass a one-way platform but respects solid ceilings. Route results include the active ladder ID in `end.climbing`. Non-transform changes do not snap the object's existing fractional position.
+
+The project menu's Figma kit contains a local plugin, native component sources and the complete level. Its return JSON carries both the exported base and edited project. Import changes uses a three-way merge, preserving independent ChatGPT edits and rejecting conflicts without modifying the current level. Preserve object IDs in external workflows. Opening a return as a new project is available when separate versions are wanted.

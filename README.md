@@ -34,7 +34,7 @@ Drag a piece to move it. Its corner handle and numeric dimensions preserve aspec
 
 Long-press or right-click a piece for lock/unlock, layer order, opacity and crop. Choose Crop and drag the rectangle to keep; Reset crop restores the full source. Cropping is non-destructive. Locked pieces can be selected for unlocking but cannot be transformed. Rotation, crop, opacity and layer order are retained in projects and the exported level PNG.
 
-Choose solid, one-way platform or decoration collisions, and adjust the collision top inset. Position Max's spawn and press Play. Mobile play has no visible controls: drag to steer, swipe up to jump, flick sideways to dodge. An X in the corner or a stationary two-finger tap returns to editing. On a keyboard, arrows/A/D steer, Up/W jumps, Shift runs, K/X dodges, and Esc returns to editing.
+Choose solid, one-way platform, ladder or decoration collisions, and adjust the collision top inset. Position Max's spawn and press Play. Mobile play has no visible controls: drag to steer, swipe up to jump, flick sideways to dodge. An X in the corner or a stationary two-finger tap returns to editing. On a keyboard, arrows/A/D steer, Up/W jumps or climbs, Down/S descends, Space/J jumps off a ladder, Shift runs, K/X dodges, and Esc returns to editing. Add a ladder from the project menu or press L; imported artwork can also use Ladder collision. Vertical touch drags climb nearby ladders; releasing holds position and steering sideways leaves the ladder. Ladders support top and bottom exits, one-way platforms, solid ceilings and angled placement. They remain non-solid when not climbing.
 
 The Pixels toggle rasterizes all artwork together at one native world pixel per canvas pixel before zooming, so scaled and rotated assets share the same pixel grid. Toggle it off for the direct rendering view. Bounded tiles limit buffer size; camera zoom does not rotate the canvas.
 
@@ -42,7 +42,17 @@ Every committed edit is cached in IndexedDB and autosaved to cloud storage after
 
 A cloud read failure preserves the project URL and presents Retry instead of silently replacing the project with an empty canvas. Already cached projects remain editable and exportable during an outage. Live updates pause in hidden tabs, notify connected listeners immediately within a server instance, and use slower conditional checks across instances. Failed connections back off instead of repeatedly querying unavailable storage. Unchanged image sources are omitted from project and room refreshes using verified source fingerprints.
 
-Save/Open use self-contained JSON files. Export ZIP includes named transparent asset PNGs, placed level artwork, the editable project and a Max-format collision geometry reference. Unzip and drag the PNGs into Figma.
+Save/Open use self-contained JSON files. Export ZIP includes named transparent asset PNGs, placed level artwork, the editable project and a Max-format collision geometry reference. Ladders are exported separately from ledges and solid blocks.
+
+## Figma import and export
+
+Project menu → **Figma import / export** → **Download Figma kit** produces a self-contained ZIP with a local development plugin and `level.figma.json`. In the Figma desktop app, import `figma-plugin/manifest.json` as a development plugin, run Pixel Mill Bridge, and choose the kit JSON. No network, provider token or Blob access is needed.
+
+The bridge creates a native component library and a Level frame with separate editable pieces and a Spawn marker. Original PNGs, world origin, sprite-sheet hierarchy, artwork bindings, painted collision and ladders are retained. Repeated appearances reuse components. Move, rotate, resize, reflect, reorder, duplicate or remove pieces; drag component instances into the Level frame to add them. Use the plugin's collision selector to assign solid, platform, ladder or decoration behavior. Each import creates its own snapshot without replacing earlier Figma work.
+
+Select the Level frame and choose **Export back to Pixel Mill**. **Import changes** merges its return JSON against the original export, preserving independent current editor and ChatGPT changes. Conflicting same-field edits leave the current project untouched. **Open as new project** opens a separate copy for comparison. Imports are one undo step. Untouched images and hierarchy remain original; changed Figma artwork and new drawings become separate PNG assets while source images are retained. Transformed painted collision must use uniform scale without rotation; skew is rejected. Keep exactly one Spawn marker.
+
+The plugin and browser flows have automated round-trip coverage using a Figma API harness and Chromium. The development plugin still needs verification in the live Figma client. Its API usage follows the [Figma Plugin API](https://developers.figma.com/docs/plugins/) and [shared metadata limits](https://developers.figma.com/docs/plugins/api/properties/nodes-setsharedplugindata/).
 
 ## Chat and agents
 

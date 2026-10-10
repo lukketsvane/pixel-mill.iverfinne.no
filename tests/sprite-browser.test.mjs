@@ -93,6 +93,8 @@ test('browser: one character sheet retains source, editable row/frame hierarchy,
   await page.getByRole('button',{name:'Merge selected groups',exact:true}).click();await waitGroups(page,1);meta=await sheet(page,assetId);assert.equal(meta.groups[0].frameIds.length,64,'merging is explicit, not a side effect of manual mode');
   await page.locator('[data-frame="frame-0-0"]').click();await page.locator('[data-frame="frame-0-1"]').click();await page.getByRole('button',{name:'Make a group from selected frames',exact:true}).click();await waitGroups(page,2);
   meta=await sheet(page,assetId);assert.deepEqual(meta.groups.map(g=>g.frameIds.length),[62,2]);const manual=meta;
+  await project(page);await page.waitForFunction(()=>document.querySelector('#save-status').textContent==='Saved');let releaseSave,markSave;const heldSave=new Promise(resolve=>releaseSave=resolve),saveStarted=new Promise(resolve=>markSave=resolve);await page.route('**/api/projects/*',async route=>{if(route.request().method()==='PATCH'){markSave();await heldSave}await route.continue()});
+
   await page.getByRole('button',{name:'Edit sheet grouping',exact:true}).click();assert.equal(await page.locator('.sprite-organize-form input[type=number]').count(),0);await page.locator('.sprite-organize-form [name=grouping]').selectOption('row');await page.getByRole('button',{name:'Confirm sprite sheet grouping',exact:true}).click();await waitGroups(page,8);meta=await sheet(page,assetId);assert.equal(meta.frames[1].x,16);assert.equal(meta.frames[1].w,16);assert.equal(meta.preserveEmpty,true);
 
   await format.selectOption('sheet');const full=await decodePNG(await downloadBytes(page,()=>exportButton.click()));assert.deepEqual([full.w,full.h],[128,128]);
@@ -100,7 +102,7 @@ test('browser: one character sheet retains source, editable row/frame hierarchy,
   await format.selectOption('frames');const frames=entries(await downloadBytes(page,()=>exportButton.click()));assert.equal([...frames.keys()].filter(name=>name.startsWith('frames/')).length,64);const manifest=JSON.parse(frames.get('sprite-sheet.json'));assert.equal(manifest.type,'sprite_sheet');assert.equal(manifest.spriteSheet.groups.length,8);
   const saved=await project(page);assert.equal(saved.assets.length,1);assert.equal(saved.assets[0].src,source,'editing and exports preserve exact retained image source');assert.equal(saved.objects.length,0);
   // Undo is shared with the level editor: one grouping operation, one history step.
-  await page.evaluate(()=>document.querySelector('#undo').click());await waitGroups(page,2);assert.deepEqual(await sheet(page,assetId),manual);
+  await saveStarted;await page.evaluate(()=>{const original=Image.prototype.decode;Image.prototype.decode=function(){Image.prototype.decode=original;window.undoDecodeStarted=true;return new Promise(resolve=>window.releaseUndoDecode=()=>resolve(original.call(this)))};document.querySelector('#undo').click()});await page.waitForFunction(()=>window.undoDecodeStarted);releaseSave();await page.waitForFunction(()=>document.querySelector('#save-status').textContent==='Saved');await page.evaluate(()=>window.releaseUndoDecode());await page.unroute('**/api/projects/*');await waitGroups(page,2);assert.deepEqual(await sheet(page,assetId),manual);
   assert.deepEqual(h.errors,[],'the imported hierarchy is interactive without browser errors');
  }finally{await h.close()}
 });

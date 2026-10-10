@@ -34,7 +34,7 @@ export async function importImages(files,options,onProgress=()=>{}){
 export function snapshot(state){return structuredClone({format:'max-level-studio',version:1,name:state.name,spawn:state.spawn,objects:state.objects,assets:state.assets,...(state.artRequests?{artRequests:state.artRequests}:{}),...(state.assetRequests?{assetRequests:state.assetRequests}:{})})}
 export function download(blob,name){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),30000)}
 export function saveProject(state){requireProjectName(state);download(new Blob([JSON.stringify(snapshot(state))],{type:'application/json'}),safeName(state.name,'level')+'.json')}
-export async function readProject(file){if(!file||file.size>100*1024*1024)throw Error('Choose a project under 100 MB.');const project=validateProject(JSON.parse(await file.text()));await Promise.all(project.assets.filter(a=>a.src).map(a=>decode(a.src)));return project}
+export async function readProject(file){if(!file||file.size>100*1024*1024)throw Error('Choose a project under 100 MB.');const raw=JSON.parse(await file.text()),project=validateProject(raw.format==='pixel-mill-figma-return'?raw.project:raw);await Promise.all(project.assets.filter(a=>a.src).map(a=>decode(a.src)));return project}
 export async function exportProject(state,images){requireProjectName(state);
  const project=snapshot(state),entries=[{name:'level.json',data:JSON.stringify(project)}],enc=new TextEncoder();
  for(const [i,a] of state.assets.entries()){const src=a.src||(await exportSpriteSheet(a,{},state.assets)).src,bytes=Uint8Array.from(atob(src.split(',')[1]),c=>c.charCodeAt(0));entries.push({name:`assets/${String(i+1).padStart(3,'0')}-${safeName(a.name)}.png`,data:bytes})}
@@ -43,9 +43,9 @@ export async function exportProject(state,images){requireProjectName(state);
  ctx.translate(-b.x,-b.y);
  for(const o of state.objects)drawObject(ctx,o,images.get(o.artwork?.asset||o.asset));
  const png=await new Promise(resolve=>c.toBlob(resolve,'image/png'));if(!png)throw Error('PNG export failed.');entries.push({name:'level.png',data:new Uint8Array(await png.arrayBuffer())});c.width=c.height=1;
- const garden={name:state.name,ledges:[],blocks:[],spots:{start:[{x:state.spawn.x,rise:-state.spawn.y}]}};
- for(const o of platforms(state.objects)){const p={x:o.x,rise:-o.y,w:o.w,style:'stone'};if(o.solid)garden.blocks.push({...p,h:o.h});else garden.ledges.push(p)}
- entries.push({name:'garden-geometry.json',data:JSON.stringify(garden,null,2)},{name:'README.txt',data:enc.encode('Unzip and drag the PNG files into Figma.\nOpen level.json in Max Level Studio to continue editing.\nlevel.png is the placed artwork; assets/ contains the transparent pieces.\nGarden geometry uses Max x/rise coordinates, origin 0 and baseline 0. It is a geometry reference, not an automatic game deployment.\nMax sprite and base movement: lukketsvane/max.iverfinne.no.\n')});
+ const garden={name:state.name,ledges:[],blocks:[],ladders:[],spots:{start:[{x:state.spawn.x,rise:-state.spawn.y}]}};
+ for(const o of platforms(state.objects)){if(o.ladder){garden.ladders.push({id:o.id,x:o.x,rise:-o.y,w:o.w,h:o.h,inset:o.inset,rotation:o.rotation});continue}const p={x:o.x,rise:-o.y,w:o.w,style:'stone'};if(o.solid)garden.blocks.push({...p,h:o.h});else garden.ledges.push(p)}
+ entries.push({name:'garden-geometry.json',data:JSON.stringify(garden,null,2)},{name:'README.txt',data:enc.encode('For editable Figma components and a safe round trip, use Figma import / export in Pixel Mill.\nOpen level.json in Max Level Studio to continue editing.\nlevel.png is the placed artwork; assets/ contains the transparent pieces.\nGarden geometry includes ladders and uses Max x/rise coordinates, origin 0 and baseline 0. It is a geometry reference, not an automatic game deployment.\nMax sprite and base movement: lukketsvane/max.iverfinne.no.\n')});
  download(zipStore(entries),safeName(state.name,'level')+'.zip');
 }
 
