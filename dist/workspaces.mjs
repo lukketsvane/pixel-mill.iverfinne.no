@@ -27,6 +27,10 @@ export function installWorkspaces(api){
  async function updateAsset(id,fn){await change(s=>{const a=s.assets.find(a=>a.id===id);if(a)fn(a)})}
  function closeColor(){ $('block-color').hidden=true;$('sketch-color').setAttribute('aria-expanded','false') }
  function show(next){workspace=next==='assets'?'assets':'level';app.dataset.workspace=workspace;$('assets-workspace').hidden=workspace!=='assets';$('level-tab').setAttribute('aria-selected',String(workspace==='level'));$('assets-tab').setAttribute('aria-selected',String(workspace==='assets'));closeColor();for(const id of ['project','dimensions','context-menu','color-toolbar','brush-options'])$(id).hidden=true;api.setWorkspace?.(workspace);refresh()}
+ const artworkMenu=$('artwork-menu');
+ document.addEventListener('pointerdown',event=>{if(!artworkMenu.contains(event.target))artworkMenu.open=false});
+ artworkMenu.addEventListener('keydown',event=>{if(event.key==='Escape'){artworkMenu.open=false;artworkMenu.querySelector('summary').focus();event.stopPropagation()}});
+ artworkMenu.addEventListener('click',event=>{if(event.target.closest('button')&&!['treatment-scope','restore-artwork'].includes(event.target.closest('button').id))artworkMenu.open=false});
  $('level-tab').onclick=()=>show('level');$('assets-tab').onclick=()=>show('assets');
  $('workspace-tabs').onkeydown=e=>{if(!['ArrowLeft','ArrowRight'].includes(e.key))return;e.preventDefault();show(workspace==='level'?'assets':'level');$(workspace+'-tab').focus()};
  $('empty-import').onclick=()=>$('import-button').click();
