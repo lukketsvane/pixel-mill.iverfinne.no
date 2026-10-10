@@ -1,5 +1,8 @@
 import {patchSourceHash} from './agent.mjs';
 
+export const projectTokenPrefix='706d763200000001';
+export const createProjectToken=()=>projectTokenPrefix+Array.from(crypto.getRandomValues(new Uint8Array(24)),n=>n.toString(16).padStart(2,'0')).join('');
+
 export function projectName(value){
  const name=typeof value==='string'?value.trim():'';
  return name&&name.length<=60&&!/^untitled(?:\s+\d+)?$/i.test(name)&&/[^\s\u200b-\u200d\ufeff]/u.test(name)?name:null;

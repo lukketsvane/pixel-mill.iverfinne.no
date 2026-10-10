@@ -1,6 +1,6 @@
 import {cloudRequest} from './cloud-request.mjs';
 import {projectDiff,applyDiff} from './agent.mjs';
-import {projectName,hasProjectChanges,projectSourceVersions,projectVersionQuery,hydrateProject} from './project-state.mjs';
+import {projectName,hasProjectChanges,projectSourceVersions,projectVersionQuery,hydrateProject,createProjectToken} from './project-state.mjs';
 import {LiveUpdates} from './live-updates.mjs';
 
 export class ProjectCache{
@@ -24,13 +24,13 @@ export class Autosave{
  get shared(){return this.api.shared?.()}
  request(path,options={}){return cloudRequest(path,options)}
  async init({token,roomToken,skipRestore=false,preferredId}={}){
-  this.live.stop();this.epoch++;this.blocked=null;this.retryAt=0;this.failures=0;let saved,remote,all=[];
+  this.live.stop();this.epoch++;this.blocked=null;this.cloudError=null;this.retryAt=0;this.failures=0;let saved,remote,all=[];
   try{all=await this.cache.list();saved=preferredId?await this.cache.get(preferredId):token?all.find(p=>p.token===token):roomToken?all.find(p=>p.roomToken===roomToken):await this.cache.active()}catch{this.warnCache()}
   if(skipRestore&&!roomToken)saved=null;if(saved?.sharedPending)saved.dirty=true;
   try{
    if(roomToken){remote=await this.request('/api/rooms/'+roomToken);if(!remote.projectToken&&saved?.token)remote=await this.request('/api/projects/'+saved.token);else if(!remote.projectToken&&projectName(remote.project.name))remote=await this.request('/api/projects',{method:'POST',body:JSON.stringify({roomToken})});token=remote.projectToken||remote.token||null;saved??=all.find(p=>token&&p.token===token)}
    else if(token||saved?.token){token=token||saved.token;remote=await this.request('/api/projects/'+token)}
-  }catch(error){if(!saved)throw error;if([404,410].includes(error.status)){saved.deleted=true;this.blocked='Project deleted · recovery kept'}else this.status('Cached · offline')}
+  }catch(error){if(!saved)throw error;if([404,410].includes(error.status)){saved.deleted=true;this.blocked='Project deleted · recovery kept'}else{this.cloudError=error.code||'storage_unavailable';this.status('Cached · cloud unavailable')}}
   if(remote?.projectToken)token=remote.projectToken;
   if(remote&&!saved?.dirty)saved={...(saved||{}),id:saved?.id||crypto.randomUUID(),token:token||null,roomToken:remote.roomToken||roomToken||null,revision:remote.revision,project:remote.project,baseProject:remote.project,dirty:false,deleted:false,updatedAt:Date.now()};
   this.record=saved||{id:crypto.randomUUID(),token:null,revision:0,project:this.api.snapshot(),dirty:false,updatedAt:Date.now()};
@@ -80,18 +80,19 @@ export class Autosave{
      }
      response=await this.request('/api/projects/'+record.token,{method:diff?'PATCH':'PUT',body:JSON.stringify({revision:record.revision,...(diff?{diff,mutationId:record.pendingMutation.id}:{project}),knownAssets:projectSourceVersions(project.assets)})});
     }else{
-     record.pendingToken??=Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');record.pendingProject??=structuredClone(project);project=structuredClone(record.pendingProject);await this.cacheCurrent();
+     record.pendingToken??=createProjectToken();record.pendingProject??=structuredClone(project);project=structuredClone(record.pendingProject);await this.cacheCurrent();
      response=await this.request('/api/projects',{method:'POST',body:JSON.stringify({project,token:record.pendingToken})});
     }
     if(epoch!==this.epoch||record!==this.record)return;
     const canonical=response.project?hydrateProject(response.project,project):project;
     const pending=projectDiff(project,record.project),rebased=applyDiff(canonical,pending);
     record.token=response.projectToken||response.token||record.token;record.revision=response.revision;record.roomToken=response.roomToken||null;record.baseProject=structuredClone(canonical);delete record.pendingToken;delete record.pendingProject;delete record.pendingMutation;
-    record.project=rebased;this.dirty=hasProjectChanges(projectDiff(canonical,rebased));this.retryAt=0;this.failures=0;
+    record.project=rebased;this.dirty=hasProjectChanges(projectDiff(canonical,rebased));this.cloudError=null;this.retryAt=0;this.failures=0;
     const applied=await this.applyView(record.project);this.shared?.acknowledge?.({...response,project:canonical},applied!==false&&!this.dirty);
     this.api.link(record.token);await this.cacheCurrent();this.status(this.dirty?'Saving…':'Saved');this.watch();
    }catch(error){
     if(epoch!==this.epoch||record!==this.record)return;
+    this.cloudError=error.code||'storage_unavailable';
     if(error.status===409||error.message.startsWith('Conflict:'))this.blocked='Conflict · local copy kept';
     else if([404,410].includes(error.status)){record.deleted=true;this.blocked='Project deleted · recovery kept'}
     else this.retryAt=Date.now()+Math.min(60000,2000*2**Math.min(this.failures++,5));
@@ -104,8 +105,10 @@ export class Autosave{
   if(this.api.busy?.()||this.saving)return false;
   if(this.dirty){await this.flush();return !this.dirty||!!this.retryAt}
   const record=this.record,generation=this.generation,epoch=this.epoch;
-  const remote=await this.request('/api/projects/'+record.token+'?revision='+record.revision+'&'+projectVersionQuery(record.project.assets));
+  let remote;
+  try{remote=await this.request('/api/projects/'+record.token+'?revision='+record.revision+'&'+projectVersionQuery(record.project.assets))}catch(error){if(record===this.record&&epoch===this.epoch)this.cloudError=error.code||'storage_unavailable';throw error}
   if(!guard()||record!==this.record||epoch!==this.epoch)return;
+  this.cloudError=null;
   if(!remote){if(JSON.stringify(this.viewProject)!==JSON.stringify(record.project))return this.applyView(record.project,generation,guard);return true}
   if(generation!==this.generation||this.api.busy?.())return false;
   remote.project=hydrateProject(remote.project,record.project);
@@ -117,12 +120,12 @@ export class Autosave{
  acceptRemote(room,roomToken){
   if(!this.ready||!this.record)return;
   if(this.record.token&&room.projectToken&&this.record.token!==room.projectToken)return;
-  this.generation++;this.dirty=false;this.blocked=null;
+  this.generation++;this.dirty=false;this.blocked=null;this.cloudError=null;
   Object.assign(this.record,{token:room.projectToken||this.record.token,roomToken,revision:room.revision,project:structuredClone(room.project),baseProject:structuredClone(room.project),deleted:false});
   this.viewProject=structuredClone(room.project);void this.cacheCurrent();this.watch();this.status('Live · r'+room.revision);
  }
  unavailable(message){this.live.stop();this.blocked='Project unavailable · recovery kept';if(this.record){this.record.deleted=true;void this.cacheCurrent()}this.status(this.blocked);this.api.error?.(message)}
- async start(project){await this.flush();await this.cacheCurrent();this.live.stop();this.epoch++;clearTimeout(this.timer);this.blocked=null;this.retryAt=0;this.failures=0;
+ async start(project){await this.flush();await this.cacheCurrent();this.live.stop();this.epoch++;clearTimeout(this.timer);this.blocked=null;this.cloudError=null;this.retryAt=0;this.failures=0;
   this.record={id:crypto.randomUUID(),token:null,revision:0,project,dirty:true,updatedAt:Date.now()};this.viewProject=structuredClone(project);await this.api.restore(project);this.ready=true;this.dirty=true;this.generation++;await this.cacheCurrent();void this.flush();this.status(projectName(project.name)?'Saving…':'Name project to save');
  }
  async load(id){await this.flush();await this.cacheCurrent();const saved=await this.cache.get(id);if(!saved)throw Error('Saved project is unavailable.');await this.cache.select(id);return this.init({token:saved.token,preferredId:id})}

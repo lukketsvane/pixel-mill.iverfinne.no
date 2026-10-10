@@ -3,12 +3,13 @@ import {prepareArtwork,getArtworkRequest,applyArtwork,applyAssetSheet,prepareAss
 import {agentTools,editProject,projectInfo,compactProjectInfo,editSummary,projectDiff,applyDiff,simulate,imageProject,spriteSheetProject,inspectSpriteSheet,exportProjectSpriteSheet,getProjectAssetImage,patchSourceHash} from '../dist/agent.mjs';
 import {assertStoredProject,assertRoomAccess,resolveProject,writeProject,projectEvents} from './project-store.mjs';
 import {projectRoute,commitProjectPatch} from './project-routes.mjs';
+import {projectTokenPrefix} from '../dist/project-state.mjs';
 const MAX_BYTES=32*1024*1024,TTL=7*86400000;
 const response=(value,status=200,headers={})=>new Response(value===null?null:JSON.stringify(value),{status,headers:{'Content-Type':'application/json','Cache-Control':'no-store','Referrer-Policy':'no-referrer',...headers}});
 const toolResult=value=>({content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value});
 const fail=(message,revision)=>({content:[{type:'text',text:message}],isError:true,structuredContent:{error:message,...(message.startsWith('Conflict:')?{code:'edit_conflict',revision,nextTool:'get_level'}:{})}});
 async function body(request){const length=Number(request.headers.get('content-length')||0);if(length>MAX_BYTES)throw Error('Project exceeds the 32 MB agent limit.');const text=await request.text();if(new TextEncoder().encode(text).length>MAX_BYTES)throw Error('Project exceeds the 32 MB agent limit.');return JSON.parse(text)}
-async function keyFor(token){const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return'rooms/'+Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('')}
+async function keyFor(token){const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(token));return(token.startsWith(projectTokenPrefix)?'v2/':'')+'rooms/'+Array.from(new Uint8Array(hash),b=>b.toString(16).padStart(2,'0')).join('')}
 function publicRoom(room,known=[]){
  if(!Array.isArray(known)||known.length>2000)throw Error('Invalid known asset versions.');
  const versions=new Map(known.filter(pair=>Array.isArray(pair)&&pair.length===2&&typeof pair[0]==='string'&&typeof pair[1]==='string'&&/^[a-f0-9]{64}$/.test(pair[1])));

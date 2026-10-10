@@ -1,7 +1,7 @@
-import {requireProjectName} from '../dist/project-state.mjs';
+import {requireProjectName,createProjectToken} from '../dist/project-state.mjs';
 export const PROJECT_TTL=7*86400000;
 const projectListeners=new Map();
-export const privateToken=()=>Array.from(crypto.getRandomValues(new Uint8Array(32)),b=>b.toString(16).padStart(2,'0')).join('');
+export const privateToken=createProjectToken;
 export function projectError(message,status){return Object.assign(Error(message),{status})}
 export function assertStoredProject(record){if(!record||record.deleted||record.deletedAt)throw projectError('Project was deleted. Your local work is kept.',410)}
 // Project and MCP capabilities resolve to ONE revisioned record. Existing

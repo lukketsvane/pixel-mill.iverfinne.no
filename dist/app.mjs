@@ -306,7 +306,7 @@ if(typeof location!=='undefined'){
   app.inert=true;
   const loadProject=async()=>{
    app.inert=true;
-   try{await autosave.init({token:project,roomToken:room});document.querySelector('#project-load-error')?.remove();const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}}
+   try{await autosave.init({token:project,roomToken:room});document.querySelector('#project-load-error')?.remove();const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked&&!autosave.cloudError){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}}
    catch(error){
     message(error.message,6000);
     if(!autosave.ready){

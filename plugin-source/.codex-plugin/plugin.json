@@ -18,7 +18,7 @@
   },
   "apps": "./.app.json",
   "name": "max-level-studio",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Design and test one shared MAX Night Garden level in Pixel Mill.",
   "author": {
     "name": "Iver Finne"
