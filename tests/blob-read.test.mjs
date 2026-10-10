@@ -38,3 +38,14 @@ test('preview overwrites and conditional project writes use stable blob names',a
  }
  agent.assertNoPendingInterceptors();
 });
+
+test('packed Blob records hydrate original images without changing their concurrency version',async t=>{
+ const previous=getGlobalDispatcher(),agent=new MockAgent(),token=process.env.BLOB_READ_WRITE_TOKEN;
+ agent.disableNetConnect();setGlobalDispatcher(agent);process.env.BLOB_READ_WRITE_TOKEN='vercel_blob_rw_teststore_testtoken';
+ t.after(async()=>{setGlobalDispatcher(previous);await agent.close();if(token===undefined)delete process.env.BLOB_READ_WRITE_TOKEN;else process.env.BLOB_READ_WRITE_TOKEN=token});
+ const src='data:image/png;base64,aGVsbG8=';
+ agent.get('https://teststore.private.blob.vercel-storage.com').intercept({path:'/rooms/packed?cache=0',method:'GET'}).reply(200,{pixelMillStorage:1,data:{revision:7,project:{src:null},history:[{src:null}]},images:[{source:src,paths:[['project','src'],['history',0,'src']]}]},{headers:{etag:'"packed-version"'}});
+ const result=await blobBucket.get('rooms/packed');assert.equal(result.etag,'"packed-version"');
+ assert.deepEqual(await result.json(),{revision:7,project:{src},history:[{src}]});
+ agent.assertNoPendingInterceptors();
+});

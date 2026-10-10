@@ -81,6 +81,12 @@ On Vercel, the same-origin `/api/*` and `/mcp/*` routes run in `api/handler.js`,
 
 A suspended Blob store can also return 403, including when credentials are valid. Check the connected store's usage and billing status in Vercel. The API translates storage failures to retryable HTTP 503 responses without exposing credentials. Code changes do not reset a provider quota or unsuspend a store. Reads and writes remain private, use stable paths, and preserve conditional-write protection; previews can overwrite their own stable path.
 
+PNG data is stored once per record, even when repeated throughout undo history. Existing records remain readable and are compacted on their next successful save. API responses, local exports and Figma round trips still contain the original embedded PNGs.
+
+To offload PNG images to ImgBB, add `IMGBB_API_KEY` as a sensitive server environment variable in Vercel and redeploy. Obtain a key at https://api.imgbb.com/. Enabling this opts into publicly accessible image URLs hosted by ImgBB; project metadata and edit capabilities remain in private Blob storage. The key is sent only in the server's upload body and never reaches the browser. Original images are downloaded and SHA-256 verified before their references are saved. Failed uploads retain embedded originals and back off for one minute; an upload batch has an 8-second budget. Frequent canvas previews stay in Blob. No automatic upload expiry is requested. Existing external images must remain available on ImgBB for cold cloud reads; local project exports remain self-contained.
+
+ImgBB does not replace the revisioned project database or lift an existing Blob suspension. A valid Blob store is still required for saving and ChatGPT collaboration. Deleting files reduces stored bytes, but does not undo monthly operations or transfer usage. Confirm the exceeded quota before deleting project data.
+
 ## Max reference and verification
 
 `dist/assets/max.png` is the unmodified 256 × 256 embedded player sheet from `lukketsvane/max.iverfinne.no`, retrieved 2026-09-24. Frames are 32 × 32, anchor (16,31), with interpolation disabled. Base movement constants and touch thresholds follow the source game. This is a terrain playtester; gardening, class perks, enemies and inventory are not included. The source game is not modified.

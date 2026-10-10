@@ -1,5 +1,7 @@
 import {get,put,del,BlobPreconditionFailedError} from '@vercel/blob';
+import {createImageStorage} from './image-storage.mjs';
 
+const imageStorage=createImageStorage();
 const credentials=()=>process.env.BLOB_READ_WRITE_TOKEN?{token:process.env.BLOB_READ_WRITE_TOKEN}:{};
 function storageError(error){
  if(error?.name==='AbortError')return error;
@@ -13,13 +15,14 @@ export const blobBucket={
    if(!result)return null;
    if(result.statusCode===304)return{etag:result.blob.etag,notModified:true};
    if(!result.blob.etag||result.blob.etag.startsWith('W/'))throw Error('Storage did not return a strong version tag.');
-   return{etag:result.blob.etag,json:async()=>{try{return JSON.parse(await new Response(result.stream).text())}catch(error){throw storageError(error)}}};
+   return{etag:result.blob.etag,json:async()=>{try{return await imageStorage.decode(JSON.parse(await new Response(result.stream).text()))}catch(error){throw storageError(error)}}};
   }catch(error){if(error.message==='Storage did not return a strong version tag.')throw error;throw storageError(error)}
  },
  async put(key,text,options={}){
   const previous=options.onlyIf?.etagMatches;
   try{
-   const result=await put(key,text,{...credentials(),access:'private',contentType:'application/json',addRandomSuffix:false,allowOverwrite:!!previous||!options.onlyIf,...(previous?{ifMatch:previous}:{})});
+   const stored=await imageStorage.encode(text,{offload:!key.endsWith('/preview')});
+   const result=await put(key,stored,{...credentials(),access:'private',contentType:'application/json',addRandomSuffix:false,allowOverwrite:!!previous||!options.onlyIf,...(previous?{ifMatch:previous}:{})});
    return{etag:result.etag};
   }catch(error){
    if(error instanceof BlobPreconditionFailedError||error?.name==='BlobAlreadyExistsError')return null;
