@@ -38,7 +38,9 @@ Choose solid, one-way platform or decoration collisions, and adjust the collisio
 
 The Pixels toggle rasterizes all artwork together at one native world pixel per canvas pixel before zooming, so scaled and rotated assets share the same pixel grid. Toggle it off for the direct rendering view. Bounded tiles limit buffer size; camera zoom does not rotate the canvas.
 
-Every committed edit is cached in IndexedDB and autosaved to cloud storage after 750 ms idle. Offline edits retry when connectivity returns and every 15 seconds. The Projects menu reopens cached projects; the project URL can reopen its cloud copy on another device. A stale cloud revision creates a recovery copy, preserving both versions. Project files do not expire; agent-session links remain separately revocable.
+Every committed edit is cached in IndexedDB and autosaved to cloud storage after 750 ms idle. Saved projects and connected agent sessions use the same durable save queue. An interrupted save retains its edit identifier across reloads, so retries cannot duplicate a committed change. Offline saves retry with bounded backoff and immediately when connectivity returns; Projects also offers Retry cloud saving. The Projects menu reopens cached projects; the project URL can reopen its cloud copy on another device. Independent fields merge, including human movement and AI styling on the same object. Conflicting edits retain the local version and offer an explicit recovery copy or the latest cloud version. Project files do not expire; agent-session links remain separately revocable.
+
+A cloud read failure preserves the project URL and presents Retry instead of silently replacing the project with an empty canvas. Already cached projects remain editable and exportable during an outage. Live updates pause in hidden tabs, notify connected listeners immediately within a server instance, and use slower conditional checks across instances. Failed connections back off instead of repeatedly querying unavailable storage. Unchanged image sources are omitted from project and room refreshes using verified source fingerprints.
 
 Save/Open use self-contained JSON files. Export ZIP includes named transparent asset PNGs, placed level artwork, the editable project and a Max-format collision geometry reference. Unzip and drag the PNGs into Figma.
 
@@ -66,6 +68,8 @@ python3 -m http.server 8000 --directory dist
 The static server supports editing and local WebMCP. Autosave cloud storage and chat need the Worker backend. Remote MCP needs the included Worker, not just static hosting: build produces `dist/server/index.js`, which serves the frontend and `/api/rooms/*` / `/mcp/*` routes. Bind a Cloudflare R2 bucket as `BUCKET`. Rooms use conditional writes, revision checks and per-piece conflict detection. No credentials are bundled.
 
 On Vercel, the same-origin `/api/*` and `/mcp/*` routes run in `api/handler.js`, with private Vercel Blob storage for rooms, previews and project saves. Create a **private** Blob store in the Vercel project and connect it to Production (and Preview if needed); Vercel supplies `BLOB_READ_WRITE_TOKEN`, or an OIDC token and `BLOB_STORE_ID`. Redeploy after connecting the store. The project returns HTTP 503 until storage is configured. Do not put the Blob token in the browser or GitHub. The GitHub repository and custom domain are configured in the Vercel project, separately from this code.
+
+A suspended Blob store can also return 403, including when credentials are valid. Check the connected store's usage and billing status in Vercel. The API translates storage failures to retryable HTTP 503 responses without exposing credentials. Code changes do not reset a provider quota or unsuspend a store. Reads and writes remain private, use stable paths, and preserve conditional-write protection; previews can overwrite their own stable path.
 
 ## Max reference and verification
 

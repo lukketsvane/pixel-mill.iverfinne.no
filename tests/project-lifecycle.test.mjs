@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {agentFetch} from '../worker/api.mjs';
-import {projectEvents} from '../worker/project-store.mjs';
+import {projectEvents,writeProject} from '../worker/project-store.mjs';
 import {projectName} from '../dist/project-state.mjs';
 import {projectDiff,editProject} from '../dist/agent.mjs';
 import {Autosave} from '../dist/autosave.mjs';
@@ -103,6 +103,16 @@ test('live client retries deferred drawing updates and ignores events from an ol
  const live=new LiveUpdates({revision:()=>revision,refresh:async()=>{calls++;if(calls===1)return false;revision=2;return true}});t.after(()=>live.stop());
  live.start('/api/projects/first');sources[0].events.change({data:JSON.stringify({revision:2})});await live.inflight;assert.equal(live.deferred,true);await new Promise(resolve=>setTimeout(resolve,420));assert.equal(revision,2);
  const oldSource=sources[0];live.start('/api/projects/second');const count=calls;oldSource.events.change({data:'{"revision":99}'});await Promise.resolve();assert.equal(calls,count);assert.equal(oldSource.closed,true);live.stop();assert.equal(sources[1].closed,true);
+});
+
+test('local commits notify live listeners immediately without an extra storage read',async()=>{
+ const bucket=new Bucket(),record={project:base(),revision:0},stored=await bucket.put('live',JSON.stringify(record)),abort=new AbortController();
+ const response=projectEvents(new Request('https://pixel.example/events',{signal:abort.signal}),bucket,'live',{record,object:stored},null,{interval:3000,lifetime:10000}),reader=response.body.getReader();
+ try{
+  await reader.read();await reader.read();const reads=bucket.reads;
+  await writeProject(bucket,'live',{...record,revision:1},stored.etag);
+  const event=await reader.read();assert.match(new TextDecoder().decode(event.value),/"revision":1/);assert.equal(bucket.reads,reads);
+ }finally{abort.abort();await reader.cancel()}
 });
 
 test('legacy separate saved snapshots resolve to live room state without forking or losing the old recovery',async()=>{

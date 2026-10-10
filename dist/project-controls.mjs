@@ -9,8 +9,10 @@ export function installProjectControls(api){
  const explanation=document.createElement('p');explanation.textContent='Your local changes are kept. Save them as a new project, or load the latest cloud version.';
  const copy=document.createElement('button');copy.textContent='Save local as new project';
  const latest=document.createElement('button');latest.textContent='Load latest cloud version';
- recovery.append(explanation,copy,latest);
- function refresh(){const save=api.getSave(),shared=api.getShared();undo.hidden=!save?.lastDeleted;undo.disabled=busy;recovery.hidden=!(save?.blocked||shared?.paused);latest.disabled=!save?.record?.token||busy;copy.disabled=busy;indicator.hidden=!indicator.textContent}
+ const retry=document.createElement('button');retry.textContent='Retry cloud saving';
+ retry.onclick=async()=>{if(busy)return;busy=true;refresh();try{await api.getSave().retry()}catch(error){api.message(error.message)}finally{busy=false;refresh()}};
+ recovery.append(explanation,retry,copy,latest);
+ function refresh(){const save=api.getSave(),shared=api.getShared();undo.hidden=!save?.lastDeleted;undo.disabled=busy;recovery.hidden=!(save?.blocked||shared?.paused||save?.retryAt);retry.hidden=!save?.retryAt||!!save?.blocked;retry.disabled=busy;explanation.textContent=save?.retryAt&&!save?.blocked?'Cloud saving is unavailable. Your work is kept on this device and will retry automatically. You can also export it from the project menu.':'Your local changes are kept. Save them as a new project, or load the latest cloud version.';latest.disabled=!save?.record?.token||busy;copy.disabled=busy;indicator.hidden=!indicator.textContent}
  async function openProject(p){
   if(busy)return;busy=true;refresh();api.prepare();
   try{await api.leave();const save=api.getSave();await save.load(p.id);const token=save.record?.roomToken;if(token&&!save.dirty&&!save.blocked)try{await api.getShared().connect(token)}catch(error){api.getShared().detach();api.message(error.message)}api.opened();dialog.close()}
@@ -44,8 +46,8 @@ export function installProjectControls(api){
   busy=true;refresh();api.prepare();
   try{
    await api.leave();await save.cacheQueue;const old=structuredClone(save.record);
-   await save.cache.put({...old,id:crypto.randomUUID(),token:null,roomToken:null,pendingToken:undefined,baseProject:undefined,deleted:false,dirty:true,project:{...api.snapshot(),name:(projectName(old.project.name)||'Project').slice(0,45)+' (recovery)'},updatedAt:Date.now()});
-   save.dirty=false;save.blocked=null;save.record.dirty=false;await save.cacheCurrent();await save.load(old.id);
+   await save.cache.put({...old,id:crypto.randomUUID(),token:null,roomToken:null,pendingToken:undefined,pendingMutation:undefined,baseProject:undefined,deleted:false,dirty:true,project:{...api.snapshot(),name:(projectName(old.project.name)||'Project').slice(0,45)+' (recovery)'},updatedAt:Date.now()});
+   save.dirty=false;save.blocked=null;save.record.dirty=false;delete save.record.pendingMutation;await save.cacheCurrent();await save.load(old.id);
    if(save.record.roomToken)await api.getShared().connect(save.record.roomToken);api.opened();await render();api.message('Latest version loaded · local recovery kept');
   }catch(error){api.message(error.message,7000)}finally{busy=false;refresh()}
  };

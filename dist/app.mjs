@@ -1,11 +1,11 @@
 import {clamp,snap,screenToWorld,zoomAt,bounds,platforms,newPlayer,stepPlayer} from './engine.mjs';
 import {applyObjectTransform,localToWorld,worldToLocal,objectBounds,pointBounds,anchorCamera,drawObject,resizeFromCorner,cropObject,resetCrop,snapObject} from './geometry.mjs';
-import {agentTools,editProject,projectInfo,simulate,imageProject,spriteSheetProject,inspectSpriteSheet,exportProjectSpriteSheet,getProjectAssetImage} from './agent.mjs';
+import {agentTools,editProject,projectDiff,projectInfo,simulate,imageProject,spriteSheetProject,inspectSpriteSheet,exportProjectSpriteSheet,getProjectAssetImage} from './agent.mjs';
 import {SharedLevel} from './shared.mjs';
 import {installPlayInput} from './play-input.mjs';
 import {paintPixelLayer} from './pixel-view.mjs';
 import {Autosave} from './autosave.mjs';
-import {projectName} from './project-state.mjs';
+import {projectName,hasProjectChanges} from './project-state.mjs';
 import {installProjectControls} from './project-controls.mjs';
 import {installChat} from './chat.mjs';
 import {installAssetTray} from './asset-tray.mjs';
@@ -178,7 +178,7 @@ function render(now){requestAnimationFrame(render);const elapsed=lastTime?Math.m
 }
 refresh();requestAnimationFrame(render);
 // The browser and remote MCP connection use the same state/actions.
-async function applyAgentProject(next,{guard=()=>true,remote=true}={}){const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!projectBusy()&&revision===localRevision&&guard()});if(projectBusy()||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();if(!remote)autosave?.changed()}
+async function applyAgentProject(next,{guard=()=>true,remote=true}={}){if(!guard())return false;if(!hasProjectChanges(projectDiff(snapshot(state),next)))return true;const revision=localRevision;await cacheAssets(next.assets,{guard:()=>!projectBusy()&&revision===localRevision&&guard()});if(projectBusy()||revision!==localRevision||!guard())return false;if(remote)localRevision++;state=next;if(!current())selected=null;if(playing)colliders=platforms(state.objects);refresh();renderPalette();if(!remote)autosave?.changed()}
 async function previewPNG(){const c=document.createElement('canvas');const scale=Math.min(1,960/canvas.width);c.width=Math.round(canvas.width*scale);c.height=Math.round(canvas.height*scale);const context=c.getContext('2d');context.imageSmoothingEnabled=false;context.drawImage(canvas,0,0,c.width,c.height);return c.toDataURL('image/png')}
 function projectBusy(){return !!document.activeElement?.matches?.('#inspector input,#inspector select')||!!gesture||!!numberScrub?.active()||importing||!!adjustBefore||!!opacityBefore||document.activeElement===$('#project-name')&&$('#project-name').value!==(projectName(state.name)||'')}
 function ensureProjectName(){if(projectName(state.name))return true;$('#project').hidden=false;$('#project-name').focus();message('Give the project a name before saving.');return false}
@@ -186,6 +186,7 @@ function saveProject(project){if(ensureProjectName())saveProjectFile(project)}
 function syncStatus(text){$('#save-status').textContent=text;projectControls?.status(text)}
 let projectControls=null;
 shared=new SharedLevel({snapshot:()=>snapshot(state),apply:applyAgentProject,busy:projectBusy,
+ persist:()=>autosave?.record?.token?autosave.flush():null,localChanges:()=>!!(autosave?.dirty||autosave?.saving),
  beforeConnect:async token=>{if(autosave?.blocked||token&&autosave?.dirty)throw Error('Local changes are kept. Open Projects to save a recovery copy or load the latest version.');if(!token){if(!ensureProjectName())throw Error('Give the project a name before connecting.');await Promise.resolve();await autosave?.flush();if(autosave?.dirty||autosave?.blocked)throw Error('Save the project before connecting. Your local changes are kept.');if(autosave?.record?.token)return{projectToken:autosave.record.token,revision:autosave.record.revision}}},
  accepted:(room,token)=>autosave?.acceptRemote(room,token),connection:()=>{autosave?.watch();projectControls?.refresh()},status:syncStatus,
  setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});
@@ -296,7 +297,25 @@ if(typeof location!=='undefined'){
  if(typeof indexedDB!=='undefined'){
   autosave=new Autosave({snapshot:()=>snapshot(state),restore:async p=>{await restore(p);fit()},apply:applyAgentProject,busy:projectBusy,shared:()=>shared,error:text=>message(text,7000),status:syncStatus,link:token=>{if(!location.hash.startsWith('#room='))window.history.replaceState(null,'','#project='+token)}});
   app.inert=true;
-  (async()=>{try{await autosave.init({token:project,roomToken:room});const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}}catch(error){message(error.message,6000);if(!autosave.ready){window.history.replaceState(null,'',location.pathname);await autosave.init()}}finally{app.inert=false}})();
-  window.addEventListener('online',()=>void autosave.flush());setInterval(()=>{if(autosave.dirty)void autosave.flush()},15000);
+  const loadProject=async()=>{
+   app.inert=true;
+   try{await autosave.init({token:project,roomToken:room});document.querySelector('#project-load-error')?.remove();const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}}
+   catch(error){
+    message(error.message,6000);
+    if(!autosave.ready){
+     let panel=document.querySelector('#project-load-error');
+     if(!panel){
+      panel=document.createElement('dialog');panel.id='project-load-error';panel.setAttribute('aria-labelledby','project-load-title');
+      const title=document.createElement('h2');title.id='project-load-title';title.textContent='Could not open this project';
+      const text=document.createElement('p');text.textContent='The cloud copy could not be loaded. Your project link is kept. Retry when storage is available, or start a separate local draft.';
+      const retry=document.createElement('button');retry.textContent='Retry';retry.onclick=async()=>{retry.disabled=true;try{await loadProject()}finally{retry.disabled=false}};
+      const draft=document.createElement('button');draft.textContent='Start a local draft';draft.onclick=async()=>{await autosave.start(snapshot(state));window.history.replaceState(null,'',location.pathname);panel.remove();app.inert=false};
+      panel.append(title,text,retry,draft);panel.addEventListener('cancel',event=>event.preventDefault());document.body.append(panel);panel.showModal();
+     }
+    }
+   }finally{app.inert=!autosave.ready}
+  };
+  void loadProject();
+  window.addEventListener('online',()=>void autosave.retry());setInterval(()=>{if(autosave.dirty)void autosave.flush()},15000);
  }else if(room)shared.connect(room).then(showAgent).catch(error=>message(error.message,6000));
 }

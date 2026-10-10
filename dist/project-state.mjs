@@ -11,6 +11,14 @@ export function requireProjectName(project){
 }
 export const hasProjectChanges=diff=>Object.values(diff).some(value=>Array.isArray(value)?value.length:!!value);
 export const projectSourceVersions=assets=>assets.filter(a=>typeof a.src==='string').map(a=>[a.id,patchSourceHash(a.src)]);
+export function projectVersionQuery(assets){
+ const pairs=[];let length=6;
+ for(const asset of assets.filter(a=>typeof a.src==='string').sort((a,b)=>b.src.length-a.src.length)){
+  const pair=[asset.id,patchSourceHash(asset.src)],size=encodeURIComponent(JSON.stringify(pair)).length+3;
+  if(length+size>6000)continue;pairs.push(pair);length+=size;
+ }
+ return'assetVersions='+encodeURIComponent(JSON.stringify(pairs));
+}
 export function hydrateProject(project,...sources){
  const cached=new Map();for(const source of sources)for(const asset of source?.assets||[])if(typeof asset.src==='string')cached.set(asset.id,asset);
  return{...project,assets:project.assets.map(value=>{

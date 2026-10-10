@@ -24,7 +24,7 @@ async function browserHarness(){
  const env={BUCKET:new BrowserBucket()},requests=[];
  const server=http.createServer(async(req,res)=>{try{
   const url=new URL(req.url,'http://'+req.headers.host);requests.push({path:url.pathname,method:req.method});
-  if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/mcp/')){const chunks=[];for await(const chunk of req)chunks.push(chunk);const result=await agentFetch(new Request(url,{method:req.method,headers:req.headers,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);res.writeHead(result.status,Object.fromEntries(result.headers));res.end(Buffer.from(await result.arrayBuffer()));return}
+  if(url.pathname.startsWith('/api/')||url.pathname.startsWith('/mcp/')){const chunks=[];for await(const chunk of req)chunks.push(chunk);const abort=new AbortController();res.once('close',()=>abort.abort());const result=await agentFetch(new Request(url,{method:req.method,headers:req.headers,signal:abort.signal,...(['GET','HEAD'].includes(req.method)?{}:{body:Buffer.concat(chunks)})}),env);res.writeHead(result.status,Object.fromEntries(result.headers));res.flushHeaders();if(result.body)for await(const chunk of result.body){if(res.destroyed)break;res.write(chunk)}if(!res.destroyed)res.end();return}
   const filename=path.resolve(root,'.'+(url.pathname==='/'?'/index.html':url.pathname));if(!filename.startsWith(root))throw Error('Invalid path');const data=await fs.readFile(filename);res.setHeader('content-type',({'.html':'text/html','.mjs':'text/javascript','.css':'text/css','.png':'image/png'})[path.extname(filename)]||'application/octet-stream');res.end(data);
  }catch(error){res.statusCode=500;res.end(error.message)}});
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));

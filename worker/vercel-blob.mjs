@@ -1,29 +1,30 @@
-// Private Vercel Blob adapter for the Worker bucket interface.
-// The opaque room token is hashed by api.mjs before it reaches this store.
 import {get,put,del,BlobPreconditionFailedError} from '@vercel/blob';
 
+const credentials=()=>process.env.BLOB_READ_WRITE_TOKEN?{token:process.env.BLOB_READ_WRITE_TOKEN}:{};
+function storageError(error){
+ if(error?.name==='AbortError')return error;
+ const denied=/403|forbidden|suspend|quota|limit.exceeded/i.test(error.message||'');
+ return Object.assign(Error(denied?'Cloud storage is unavailable. The storage quota or access needs attention. Your local work is kept.':'Cloud storage is temporarily unavailable. Your local work is kept.'),{status:503,code:denied?'storage_unavailable':'storage_retry',cause:error});
+}
 export const blobBucket={
  async get(key,options={}){
-  const result=await get(key,{access:'private',useCache:false,headers:{'accept-encoding':'identity'},...(options.ifNoneMatch?{ifNoneMatch:options.ifNoneMatch}:{}),...(options.signal?{abortSignal:options.signal}:{})});
-  if(!result)return null;
-  if(result.statusCode===304)return{etag:result.blob.etag,notModified:true};
-  // Conditional writes need the strong ETag of the stored bytes, not a compressed response.
-  if(!result.blob.etag||result.blob.etag.startsWith('W/'))throw Error('Storage did not return a strong version tag.');
-  return {etag:result.blob.etag,json:async()=>JSON.parse(await new Response(result.stream).text())};
+  try{
+   const result=await get(key,{...credentials(),access:'private',useCache:false,headers:{'accept-encoding':'identity'},...(options.ifNoneMatch?{ifNoneMatch:options.ifNoneMatch}:{}),...(options.signal?{abortSignal:options.signal}:{})});
+   if(!result)return null;
+   if(result.statusCode===304)return{etag:result.blob.etag,notModified:true};
+   if(!result.blob.etag||result.blob.etag.startsWith('W/'))throw Error('Storage did not return a strong version tag.');
+   return{etag:result.blob.etag,json:async()=>{try{return JSON.parse(await new Response(result.stream).text())}catch(error){throw storageError(error)}}};
+  }catch(error){if(error.message==='Storage did not return a strong version tag.')throw error;throw storageError(error)}
  },
  async put(key,text,options={}){
   const previous=options.onlyIf?.etagMatches;
   try{
-   const result=await put(key,text,{
-    access:'private',contentType:'application/json',
-    allowOverwrite:!!previous,...(previous?{ifMatch:previous}:{})
-   });
-   return {etag:result.etag};
+   const result=await put(key,text,{...credentials(),access:'private',contentType:'application/json',addRandomSuffix:false,allowOverwrite:!!previous||!options.onlyIf,...(previous?{ifMatch:previous}:{})});
+   return{etag:result.etag};
   }catch(error){
-   // Matches the R2 conditional-write contract expected by api.mjs.
    if(error instanceof BlobPreconditionFailedError||error?.name==='BlobAlreadyExistsError')return null;
-   throw error;
+   throw storageError(error);
   }
  },
- async delete(keys){for(const key of Array.isArray(keys)?keys:[keys])await del(key)}
+ async delete(keys){try{await del(Array.isArray(keys)?keys:[keys],credentials())}catch(error){throw storageError(error)}}
 };

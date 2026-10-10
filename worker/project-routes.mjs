@@ -1,12 +1,19 @@
 import {validateProject} from '../dist/engine.mjs';
 import {resolveSavedProject} from './legacy-projects.mjs';
-import {applyDiff} from '../dist/agent.mjs';
+import {applyDiff,patchSourceHash} from '../dist/agent.mjs';
 import {requireProjectName} from '../dist/project-state.mjs';
 import {privateToken,projectError,assertStoredProject,assertRoomAccess,resolveProject,writeProject,projectEvents,PROJECT_TTL} from './project-store.mjs';
 
-export async function commitProjectPatch(bucket,key,record,etag,diff,commit,access=()=>{}){
+export async function commitProjectPatch(bucket,key,record,etag,diff,commit,access=()=>{},mutationId){
+ if(mutationId!==undefined&&(typeof mutationId!=='string'||!/^[a-zA-Z0-9_-]{16,80}$/.test(mutationId)))throw Error('Invalid edit identifier.');
+ const fingerprint=mutationId?patchSourceHash(JSON.stringify(diff)):null;
  for(let attempt=0;attempt<3;attempt++){
-  assertStoredProject(record);access(record);const next=applyDiff(record.project,diff);if(record.projectToken)requireProjectName(next);commit(record,next);
+  assertStoredProject(record);access(record);
+  const receipt=record.mutations?.find(item=>item.id===mutationId);
+  if(receipt){if(receipt.fingerprint!==fingerprint)throw Error('An edit identifier cannot be reused for different changes.');return record}
+  const next=applyDiff(record.project,diff);if(record.projectToken)requireProjectName(next);
+  if(JSON.stringify(next)!==JSON.stringify(record.project))commit(record,next);else if(!mutationId)return record;
+  if(mutationId)record.mutations=[...(record.mutations||[]),{id:mutationId,fingerprint}].slice(-128);
   try{await writeProject(bucket,key,record,etag);return record}catch(error){
    if(!error.message.startsWith('Conflict:')||attempt===2)throw error;
    const fresh=await bucket.get(key);if(!fresh)throw projectError('Project was deleted.',410);
@@ -58,7 +65,7 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
    return response({restored:true,...publicRoom(next)});
   }
   if(match[2])return request.method==='GET'?projectEvents(request,bucket,key,found):response({error:'Method not allowed'},405);
-  if(request.method==='GET'){if(url.searchParams.get('revision')===String(saved.revision))return response(null,304);return response(publicRoom(saved))}
+  if(request.method==='GET'){if(url.searchParams.get('revision')===String(saved.revision))return response(null,304);const known=url.searchParams.has('assetVersions')?JSON.parse(url.searchParams.get('assetVersions')):[];return response(publicRoom(saved,known))}
   if(request.method==='DELETE'){
    const value=await body(request);revisionCheck(saved,value.revision);
    // Conditional tombstone removes the bytes, invalidates every alias and
@@ -76,7 +83,7 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
    revisionCheck(saved,value.revision);requireProjectName(value.project);commitRoom(saved,validateProject(value.project));
    await writeProject(bucket,key,saved,object.etag);return response(publicRoom(saved,value.knownAssets||[]));
   }
-  const updated=await commitProjectPatch(bucket,key,saved,object.etag,value.diff,commitRoom);
+  const updated=await commitProjectPatch(bucket,key,saved,object.etag,value.diff,commitRoom,undefined,value.mutationId);
   return response(publicRoom(updated,value.knownAssets||[]));
  }
  if(path==='/api/rooms'&&request.method==='POST'){

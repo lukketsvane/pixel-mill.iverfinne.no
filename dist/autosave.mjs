@@ -1,5 +1,6 @@
+import {cloudRequest} from './cloud-request.mjs';
 import {projectDiff,applyDiff} from './agent.mjs';
-import {projectName,hasProjectChanges,projectSourceVersions,hydrateProject} from './project-state.mjs';
+import {projectName,hasProjectChanges,projectSourceVersions,projectVersionQuery,hydrateProject} from './project-state.mjs';
 import {LiveUpdates} from './live-updates.mjs';
 
 export class ProjectCache{
@@ -16,14 +17,14 @@ export class ProjectCache{
 
 export class Autosave{
  constructor(api,cache=new ProjectCache()){
-  this.api=api;this.cache=cache;this.record=null;this.dirty=false;this.generation=0;this.epoch=0;this.saving=null;this.cacheQueue=Promise.resolve();this.cacheWarned=false;this.timer=null;this.ready=false;this.blocked=null;
+  this.api=api;this.cache=cache;this.record=null;this.dirty=false;this.generation=0;this.epoch=0;this.saving=null;this.cacheQueue=Promise.resolve();this.cacheWarned=false;this.timer=null;this.ready=false;this.blocked=null;this.retryAt=0;this.failures=0;
   this.live=new LiveUpdates({revision:()=>this.record?.revision??-1,refresh:guard=>this.pull(guard),status:text=>{if(!this.dirty&&!this.blocked)this.status(text)},gone:text=>this.unavailable(text)});
  }
  status(text){this.api.status(text)}
  get shared(){return this.api.shared?.()}
- async request(path,options={}){const r=await fetch(path,{...options,headers:{'Content-Type':'application/json'}});if(r.status===304)return null;const data=await r.json();if(!r.ok)throw Object.assign(Error(data.error||'Cloud saving is unavailable.'),{status:r.status});return data}
+ request(path,options={}){return cloudRequest(path,options)}
  async init({token,roomToken,skipRestore=false,preferredId}={}){
-  this.live.stop();this.epoch++;this.blocked=null;let saved,remote,all=[];
+  this.live.stop();this.epoch++;this.blocked=null;this.retryAt=0;this.failures=0;let saved,remote,all=[];
   try{all=await this.cache.list();saved=preferredId?await this.cache.get(preferredId):token?all.find(p=>p.token===token):roomToken?all.find(p=>p.roomToken===roomToken):await this.cache.active()}catch{this.warnCache()}
   if(skipRestore&&!roomToken)saved=null;if(saved?.sharedPending)saved.dirty=true;
   try{
@@ -49,7 +50,7 @@ export class Autosave{
   try{this.record.project=this.viewProject?applyDiff(this.record.project,projectDiff(this.viewProject,view)):view}catch{this.record.project=view;this.blocked='Conflict · local copy kept'}
   this.viewProject=structuredClone(view);this.dirty=true;void this.cacheCurrent();clearTimeout(this.timer);
   this.status(this.blocked||(!projectName(view.name)?'Name project to save':this.shared?.paused?'Conflict · local copy kept':'Saving…'));
-  if(!this.shared?.token&&!this.blocked&&projectName(view.name))this.timer=setTimeout(()=>void this.flush(),750);
+  if((!this.shared?.token||this.record.token)&&!this.blocked&&projectName(view.name))this.timer=setTimeout(()=>void this.flush(),750);
  }
  async applyView(next,generation=this.generation,externalGuard=()=>true){const record=this.record,epoch=this.epoch;
   const guard=()=>this.record===record&&epoch===this.epoch&&generation===this.generation&&!this.api.busy?.()&&externalGuard();
@@ -57,33 +58,43 @@ export class Autosave{
   const ok=this.api.apply?await this.api.apply(next,{guard,remote:true}):await this.api.restore(next);
   if(ok===false||!guard())return false;this.viewProject=structuredClone(next);return true;
  }
+ async retry(){this.retryAt=0;this.failures=0;await this.flush();if(!this.dirty)await(this.shared?.token?this.shared.poll():this.pull())}
  async flush(){
   clearTimeout(this.timer);if(!this.ready||!this.dirty)return this.cacheQueue;if(this.saving)return this.saving;
-  if(this.shared?.token){await this.shared.queue;return this.cacheCurrent()}
+  if(Date.now()<this.retryAt)return this.cacheQueue;
+  if(this.shared?.token&&!this.record.token){await this.shared.queue;return this.cacheCurrent()}
   if(this.blocked||!projectName(this.record.project.name))return this.cacheCurrent();
   const epoch=this.epoch,record=this.record;
   this.saving=(async()=>{while(this.dirty&&epoch===this.epoch&&record===this.record&&!this.blocked){
-   const generation=this.generation,project=structuredClone(record.project),base=record.baseProject;
+   const base=record.baseProject;
+   let project=structuredClone(record.project);
    if(!projectName(project.name))break;
    try{
     let response;
     if(record.token){
-     const diff=base?projectDiff(base,project):null;
+     const diff=record.pendingMutation?.diff||(base?projectDiff(base,project):null);
      if(diff&&!hasProjectChanges(diff)){this.dirty=false;await this.cacheCurrent();break}
-     response=await this.request('/api/projects/'+record.token,{method:diff?'PATCH':'PUT',body:JSON.stringify({revision:record.revision,...(diff?{diff}:{project}),knownAssets:projectSourceVersions(project.assets)})});
+     if(diff){
+      record.pendingMutation??={id:crypto.randomUUID(),diff};
+      project=applyDiff(base,diff);await this.cacheCurrent();
+     }
+     response=await this.request('/api/projects/'+record.token,{method:diff?'PATCH':'PUT',body:JSON.stringify({revision:record.revision,...(diff?{diff,mutationId:record.pendingMutation.id}:{project}),knownAssets:projectSourceVersions(project.assets)})});
     }else{
-     record.pendingToken??=Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');await this.cacheCurrent();
+     record.pendingToken??=Array.from(crypto.getRandomValues(new Uint8Array(32)),n=>n.toString(16).padStart(2,'0')).join('');record.pendingProject??=structuredClone(project);project=structuredClone(record.pendingProject);await this.cacheCurrent();
      response=await this.request('/api/projects',{method:'POST',body:JSON.stringify({project,token:record.pendingToken})});
     }
     if(epoch!==this.epoch||record!==this.record)return;
     const canonical=response.project?hydrateProject(response.project,project):project;
-    const pending=projectDiff(project,record.project);record.token=response.projectToken||response.token||record.token;record.revision=response.revision;record.roomToken=response.roomToken||null;record.baseProject=structuredClone(canonical);delete record.pendingToken;
-    record.project=applyDiff(canonical,pending);this.dirty=generation!==this.generation;
-    await this.applyView(record.project);this.api.link(record.token);await this.cacheCurrent();this.status(this.dirty?'Saving…':'Saved');this.watch();
+    const pending=projectDiff(project,record.project),rebased=applyDiff(canonical,pending);
+    record.token=response.projectToken||response.token||record.token;record.revision=response.revision;record.roomToken=response.roomToken||null;record.baseProject=structuredClone(canonical);delete record.pendingToken;delete record.pendingProject;delete record.pendingMutation;
+    record.project=rebased;this.dirty=hasProjectChanges(projectDiff(canonical,rebased));this.retryAt=0;this.failures=0;
+    const applied=await this.applyView(record.project);this.shared?.acknowledge?.({...response,project:canonical},applied!==false&&!this.dirty);
+    this.api.link(record.token);await this.cacheCurrent();this.status(this.dirty?'Saving…':'Saved');this.watch();
    }catch(error){
     if(epoch!==this.epoch||record!==this.record)return;
     if(error.status===409||error.message.startsWith('Conflict:'))this.blocked='Conflict · local copy kept';
     else if([404,410].includes(error.status)){record.deleted=true;this.blocked='Project deleted · recovery kept'}
+    else this.retryAt=Date.now()+Math.min(60000,2000*2**Math.min(this.failures++,5));
     this.status(this.blocked||(this.cacheWarned?'Not saved · connection needed':'Cached · cloud unavailable'));await this.cacheCurrent();break;
    }
   }})().finally(()=>this.saving=null);return this.saving;
@@ -91,12 +102,13 @@ export class Autosave{
  async pull(guard=()=>true){
   if(!this.ready||!this.record?.token||this.shared?.token||this.blocked)return;
   if(this.api.busy?.()||this.saving)return false;
-  if(this.dirty){await this.flush();return !this.dirty}
+  if(this.dirty){await this.flush();return !this.dirty||!!this.retryAt}
   const record=this.record,generation=this.generation,epoch=this.epoch;
-  const remote=await this.request('/api/projects/'+record.token+'?revision='+record.revision);
+  const remote=await this.request('/api/projects/'+record.token+'?revision='+record.revision+'&'+projectVersionQuery(record.project.assets));
   if(!guard()||record!==this.record||epoch!==this.epoch)return;
   if(!remote){if(JSON.stringify(this.viewProject)!==JSON.stringify(record.project))return this.applyView(record.project,generation,guard);return true}
   if(generation!==this.generation||this.api.busy?.())return false;
+  remote.project=hydrateProject(remote.project,record.project);
   if(await this.applyView(remote.project,generation,guard)===false)return false;
   if(!guard()||record!==this.record)return;
   record.project=structuredClone(remote.project);record.baseProject=structuredClone(remote.project);record.revision=remote.revision;record.roomToken=remote.roomToken||null;
@@ -110,7 +122,7 @@ export class Autosave{
   this.viewProject=structuredClone(room.project);void this.cacheCurrent();this.watch();this.status('Live · r'+room.revision);
  }
  unavailable(message){this.live.stop();this.blocked='Project unavailable · recovery kept';if(this.record){this.record.deleted=true;void this.cacheCurrent()}this.status(this.blocked);this.api.error?.(message)}
- async start(project){await this.flush();await this.cacheCurrent();this.live.stop();this.epoch++;clearTimeout(this.timer);this.blocked=null;
+ async start(project){await this.flush();await this.cacheCurrent();this.live.stop();this.epoch++;clearTimeout(this.timer);this.blocked=null;this.retryAt=0;this.failures=0;
   this.record={id:crypto.randomUUID(),token:null,revision:0,project,dirty:true,updatedAt:Date.now()};this.viewProject=structuredClone(project);await this.api.restore(project);this.ready=true;this.dirty=true;this.generation++;await this.cacheCurrent();void this.flush();this.status(projectName(project.name)?'Saving…':'Name project to save');
  }
  async load(id){await this.flush();await this.cacheCurrent();const saved=await this.cache.get(id);if(!saved)throw Error('Saved project is unavailable.');await this.cache.select(id);return this.init({token:saved.token,preferredId:id})}

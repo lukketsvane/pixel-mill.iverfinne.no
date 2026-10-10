@@ -29,7 +29,7 @@ test('browser: named mobile projects stay live across GPT edits, reopen and conf
   }catch(error){if(!res.destroyed){if(!res.headersSent)res.writeHead(500);res.end(String(error))}}
  });
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));origin='http://127.0.0.1:'+server.address().port;
- const browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))});
+ let browser;try{browser=await chromium.launch({headless:true,...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE?{executablePath:process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE}:{}),args:['--no-sandbox']})}catch(error){server.close();throw error}t.after(async()=>{await browser.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve))});
  const context=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true,acceptDownloads:true}),page=await context.newPage(),errors=[];page.on('pageerror',error=>errors.push(error.message));
  await page.goto(origin);await page.waitForFunction(()=>!document.querySelector('#app').inert);
  await page.click('#menu-button');let downloads=0;page.on('download',()=>downloads++);await page.click('#save');await page.waitForTimeout(100);assert.equal(downloads,0);assert.equal(await page.locator('#project-name').getAttribute('required'),'');assert.equal(env.BUCKET.data.size,0);
@@ -39,7 +39,19 @@ test('browser: named mobile projects stay live across GPT edits, reopen and conf
  const read=await tool('get_level');const edit=await tool('edit_level',{revision:read.structuredContent.revision,operations:[{type:'rename',name:'GPT changed'},{type:'block',id:'live-floor',x:0,y:32,width:128,height:16}]});assert.equal(edit.isError,undefined);
  await page.waitForFunction(()=>document.querySelector('#project-name').value==='GPT changed',{},{timeout:6000});
  await page.click('#menu-button');const downloading=page.waitForEvent('download');await page.click('#save');const download=await downloading;const exported=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.equal(exported.name,'GPT changed');assert.ok(exported.objects.some(o=>o.id==='live-floor'));
+ const simultaneousBase=await tool('get_level');let release,requested;
+ const hold=new Promise(resolve=>release=resolve),sent=new Promise(resolve=>requested=resolve);
+ await page.route('**/api/projects/'+projectToken,async route=>{if(route.request().method()==='PATCH'){requested();await hold}await route.continue()});
+ await page.click('#menu-button');await page.fill('#project-name','Human draft');await page.locator('#project-name').press('Tab');await sent;
+ const alongside=await tool('edit_level',{revision:simultaneousBase.structuredContent.revision,mutationId:'browser-ai-edit-00001',operations:[{type:'update',id:'live-floor',changes:{color:'#778899'}}]});assert.equal(alongside.isError,undefined);release();
+ await page.waitForFunction(()=>!document.querySelector('#save-status').textContent.includes('Saving'));await page.unroute('**/api/projects/'+projectToken);
+ const merged=await(await fetch(origin+'/api/projects/'+projectToken)).json();assert.equal(merged.project.name,'Human draft');assert.equal(merged.project.objects.find(o=>o.id==='live-floor').color,'#778899');
+ await page.fill('#project-name','GPT changed');await page.locator('#project-name').press('Tab');await page.waitForFunction(()=>document.querySelector('#save-status').textContent==='Saved');await page.click('#menu-button');
  const second=await context.newPage();second.on('pageerror',error=>errors.push(error.message));await second.goto(origin+'/#project='+projectToken);await second.waitForFunction(()=>!document.querySelector('#app').inert&&document.querySelector('#project-name').value==='GPT changed');
+ const freshContext=await browser.newContext({viewport:{width:390,height:844},isMobile:true,hasTouch:true}),unavailable=await freshContext.newPage();unavailable.on('pageerror',error=>errors.push(error.message));
+ await unavailable.route('**/api/projects/'+projectToken,route=>route.fulfill({status:503,contentType:'application/json',body:JSON.stringify({error:'Cloud storage is unavailable. Your local work is kept.'})}));
+ await unavailable.goto(origin+'/#project='+projectToken);await unavailable.getByRole('heading',{name:'Could not open this project'}).waitFor();assert.ok(unavailable.url().endsWith('#project='+projectToken));assert.equal(await unavailable.locator('#app').evaluate(element=>element.inert),true);
+ await unavailable.screenshot({path:'test-results/storage-recovery-mobile.png'});await unavailable.unroute('**/api/projects/'+projectToken);await unavailable.getByRole('button',{name:'Retry',exact:true}).click();await unavailable.waitForFunction(()=>!document.querySelector('#app').inert&&document.querySelector('#project-name').value==='GPT changed');assert.equal(await unavailable.locator('#project-load-error').count(),0);await freshContext.close();
  await page.click('#menu-button');await page.click('#projects-button');const remove=page.getByRole('button',{name:'Delete GPT changed',exact:true}).first();await remove.waitFor({state:'visible'});assert.ok(await remove.isVisible());const rect=await remove.boundingBox();assert.ok(rect.width>=44&&rect.height>=44);
  page.once('dialog',dialog=>dialog.dismiss());await remove.click();assert.equal((await fetch(origin+'/api/projects/'+projectToken)).status,200);
  await fs.mkdir('test-results',{recursive:true});await page.screenshot({path:'test-results/project-lifecycle-mobile.png'});
