@@ -19,7 +19,7 @@ export function createRemoteBucket({url,token,legacy=null,fetcher=fetch,images=c
   async get(key,options={}){
    const result=await call('get',key,options.ifNoneMatch?{etag:options.ifNoneMatch}:{},options.signal);
    if([200,304].includes(result.status))return read(result);
-   if(result.status===410||!legacy||/^(projects\/)?v2\//.test(key))return null;
+   if(result.status===410||!legacy||/^(projects\/)?v2\//.test(key)||key.startsWith('transfers/'))return null;
    const legacyError=()=>Object.assign(Error('The previous cloud copy is unavailable. Open Projects to save your local work as a new cloud project.'),{status:503,code:'legacy_storage_unavailable'});
    if(Date.now()<legacyRetryAt)throw legacyError();
    let old;

@@ -47,9 +47,9 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
   const token=value.token||privateToken(),key='projects/'+await keyFor(token);
   // The browser persists this random key before sending. A lost response can
   // therefore be retried without creating duplicate saved projects.
-  if(value.token&&await bucket.get(key)){const existing=await resolveSavedProject(bucket,keyFor,token);return response({token,...publicRoom(existing.record)})}
+  if(value.token&&await bucket.get(key)){const existing=await resolveSavedProject(bucket,keyFor,token);return response({token,...publicRoom(existing.record,value.knownAssets||[])})}
   const saved={project,revision:0,history:[],projectToken:token};
-  await writeProject(bucket,key,saved);return response({token,...publicRoom(saved)},201);
+  await writeProject(bucket,key,saved);return response({token,...publicRoom(saved,value.knownAssets||[])},201);
  }
  const match=path.match(/^\/api\/projects\/([a-f0-9]{64})(\/events)?$/);
  if(match){

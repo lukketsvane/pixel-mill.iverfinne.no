@@ -42,6 +42,8 @@ Every committed edit is cached in IndexedDB and autosaved to cloud storage after
 
 A cloud read failure preserves the project URL and presents Retry instead of silently replacing the project with an empty canvas. Already cached projects remain editable and exportable during an outage. Live updates pause in hidden tabs, notify connected listeners immediately within a server instance, and use slower conditional checks across instances. Failed connections back off instead of repeatedly querying unavailable storage. Unchanged image sources are omitted from project and room refreshes using verified source fingerprints.
 
+Large cloud requests and downloads use temporary 1 MiB parts with SHA-256 verification, keeping each request below the hosting platform's payload limit. The complete project is validated and committed atomically after all parts arrive. Interrupted transfers retain local work for retry; parts are private by capability link, removed after use and expire after 30 minutes. MCP clients retain their existing response format.
+
 Save/Open use self-contained JSON files. Export ZIP includes named transparent asset PNGs, placed level artwork, the editable project and a Max-format collision geometry reference. Ladders are exported separately from ledges and solid blocks.
 
 ## Figma import and export

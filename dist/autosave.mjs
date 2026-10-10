@@ -81,7 +81,7 @@ export class Autosave{
      response=await this.request('/api/projects/'+record.token,{method:diff?'PATCH':'PUT',body:JSON.stringify({revision:record.revision,...(diff?{diff,mutationId:record.pendingMutation.id}:{project}),knownAssets:projectSourceVersions(project.assets)})});
     }else{
      record.pendingToken??=createProjectToken();record.pendingProject??=structuredClone(project);project=structuredClone(record.pendingProject);await this.cacheCurrent();
-     response=await this.request('/api/projects',{method:'POST',body:JSON.stringify({project,token:record.pendingToken})});
+     response=await this.request('/api/projects',{method:'POST',body:JSON.stringify({project,token:record.pendingToken,knownAssets:projectSourceVersions(project.assets)})});
     }
     if(epoch!==this.epoch||record!==this.record)return;
     const canonical=response.project?hydrateProject(response.project,project):project;

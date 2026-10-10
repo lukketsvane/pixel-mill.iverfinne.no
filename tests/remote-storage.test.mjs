@@ -33,6 +33,7 @@ test('new cloud projects and agent links do not depend on suspended legacy stora
  assert.equal((await call('/api/projects/'+first.token)).status,200);
  const room=await call('/api/rooms','POST',{projectToken:first.token,revision:0});assert.equal(room.status,201);
  assert.equal((await call('/api/rooms/'+(await room.json()).token)).status,200);
+ assert.equal(await bucket.get('transfers/'+'0'.repeat(64)+'/0'),null);
  assert.equal(legacyReads,0);
  const missing=await call('/api/projects/'+'a'.repeat(64));assert.equal(missing.status,503);assert.equal((await missing.json()).code,'legacy_storage_unavailable');
  assert.equal((await call('/api/projects/'+'b'.repeat(64))).status,503);assert.equal(legacyReads,1);
