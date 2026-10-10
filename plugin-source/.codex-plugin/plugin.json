@@ -1,0 +1,28 @@
+{
+  "interface": {
+    "displayName": "pixel-mill.iverfinne.no",
+    "shortDescription": "Co-design and playtest a MAX level",
+    "longDescription": "Inspect the shared Pixel Mill level, arrange imported assets, edit terrain and collisions, and test Max's movement.",
+    "developerName": "Iver Finne",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive"
+    ],
+    "defaultPrompt": [
+      "Inspect my level and suggest a layout using the imported assets.",
+      "Build a playable route for Max and test the jumps.",
+      "Improve the current level while preserving my existing work."
+    ],
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/icon.png"
+  },
+  "apps": "./.app.json",
+  "name": "max-level-studio",
+  "version": "0.1.8",
+  "description": "Design and test one shared MAX Night Garden level in Pixel Mill.",
+  "author": {
+    "name": "Iver Finne"
+  },
+  "keywords": [],
+  "skills": "./skills"
+}
