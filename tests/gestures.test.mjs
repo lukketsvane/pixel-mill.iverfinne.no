@@ -19,3 +19,45 @@ test('one-finger resize is proportional; touch pinch can stretch one axis',()=>{
 test('long hold opens the piece menu without moving it; locked pieces cannot move',async()=>{const h=harness({locked:true}),original=structuredClone(h.state());h.send('pointerdown',1,30,40);await new Promise(r=>setTimeout(r,480));assert.equal(h.menu().id,'piece');assert.deepEqual(h.state(),original);assert.equal(h.controller.active(),false);h.send('pointerdown',2,30,40);h.send('pointermove',2,60,60);h.send('pointerup',2,60,60);assert.deepEqual(h.state(),original);assert.equal(h.commits.length,0)});
 test('crop drag tracks a bounded local rectangle',()=>{const h=harness({crop:true});h.send('pointerdown',1,30,30);h.send('pointermove',1,180,65);h.send('pointerup',1,180,65);assert.deepEqual(h.cropped(),{x:10,y:10,w:70,h:35})});
 test('cropping and reset preserve rotated, flipped source placement; rendering uses crop and opacity',()=>{for(const flip of [false,true]){const o={x:4,y:20,w:100,h:80,inset:0,rotation:37,flip,opacity:.4},old={...o};const expected=localToWorld({x:40,y:35},o);cropObject(o,{x:20,y:10,w:40,h:50});near(o.x+o.w/2,expected.x);near(o.y+o.h/2,expected.y);near(o.crop.x,flip?.4:.2);const calls=[],ctx={save(){},restore(){},translate(){},rotate(){},scale(){},drawImage(...args){calls.push(args)}};const image={width:200,height:160};drawObject(ctx,o,image);near(ctx.globalAlpha,.4);near(calls[0][1],flip?80:40);near(calls[0][2],20);near(calls[0][3],80);near(calls[0][4],100);resetCrop(o);for(const key of ['x','y','w','h','rotation'])near(o[key],old[key]);assert.equal(o.crop,null)}});
+
+function paintHarness({tool='paint',camera={x:0,y:0,z:1},legacy=false,reject=false}={}){
+ const listeners={},pointers=new Map(),keys=new Set(),strokes=[],begins=[],commits=[];let state={spawn:{x:-999,y:0},objects:[{id:'art',asset:'sheet',x:0,y:0,w:100,h:100}],marks:[]},gesture,cancels=0,rollbacks=0,legacyBegins=0;
+ const canvas={addEventListener:(type,fn)=>listeners[type]=fn,getBoundingClientRect:()=>({left:10,top:20}),focus(){},setPointerCapture(){},releasePointerCapture(){}},api={get:()=>({state,camera,tool,grid:1,playing:false,keys}),snapshot:()=>structuredClone(state),rollback:before=>{state=before;rollbacks++},preview:g=>gesture=g,hover(){},select(){},closePanels(){},refresh(){},viewChanged(){},commit:before=>commits.push(before),context(){throw Error('Paint opened context menu')},beginMask:()=>{legacyBegins++;return true},paintMask:(from,to)=>state.marks.push({from,to}),finishMask:before=>commits.push(before),cancelMask:()=>cancels++};
+ if(!legacy)Object.assign(api,{beginPaint:(world,options)=>{begins.push({world,options});return!reject},paintStroke:(from,to,options)=>{const stroke=structuredClone({from,to,options});strokes.push(stroke);state.marks.push(stroke)},finishPaint:before=>commits.push(before),cancelPaint:()=>cancels++});
+ const controller=installGestures(canvas,api,pointers),send=(type,id,x,y,options={})=>listeners[type]({type,pointerId:id,clientX:x+10,clientY:y+20,pointerType:'pen',button:type==='pointerdown'?0:-1,buttons:type==='pointerup'?0:1,pressure:type==='pointerup'?0:.5,preventDefault(){},...options});
+ return{send,controller,keys,pointers,strokes,begins,commits,camera,state:()=>state,gesture:()=>gesture,cancels:()=>cancels,rollbacks:()=>rollbacks,legacyBegins:()=>legacyBegins};
+}
+test('pen samples retain native world coordinates, pressure and sparse coalesced segments through the final endpoint',()=>{
+ const h=paintHarness({camera:{x:-3,y:4,z:2}});h.send('pointerdown',1,1,2,{pressure:.2,tiltX:20,tiltY:-10,twist:35});
+ h.send('pointermove',1,101,22,{pressure:.9,getCoalescedEvents:()=>[{clientX:31,clientY:26,pressure:.4},{clientX:71,clientY:36,pressure:.7}]});h.send('pointerup',1,121,26);
+ assert.deepEqual(h.strokes.map(s=>s.to),[{x:-2.5,y:5},{x:7.5,y:7},{x:27.5,y:12},{x:47.5,y:15},{x:57.5,y:17}]);
+ for(let i=1;i<h.strokes.length;i++)assert.deepEqual(h.strokes[i].from,h.strokes[i-1].to);
+ assert.deepEqual(h.strokes.map(s=>s.options.pressure),[.2,.4,.7,.9,.9]);assert.deepEqual(h.strokes.map(s=>s.options.fromPressure),[.2,.2,.4,.7,.9]);assert.equal(h.begins[0].options.tiltX,20);assert.equal(h.begins[0].options.twist,35);
+ assert.equal(h.commits.length,1);assert.deepEqual(h.commits[0].marks,[]);assert.equal(h.controller.active(),false);assert.equal(h.pointers.size,0);
+});
+test('long pen strokes process every coalesced sample beyond 1500 without accumulating gesture points',()=>{
+ const h=paintHarness();h.send('pointerdown',1,0,0);const samples=Array.from({length:1601},(_,i)=>({clientX:i+11,clientY:20+(i%7),pressure:.5}));h.send('pointermove',1,1601,4,{getCoalescedEvents:()=>samples});
+ assert.equal(h.strokes.length,1602);assert.equal(h.strokes.at(-1).to.x,1601);assert.equal(h.gesture().points,undefined);h.send('pointerup',1,1601,4);assert.equal(h.commits.length,1);
+});
+test('eraser tool, pen eraser end, barrel and temporary Alt pass erase state without a release paint artifact',()=>{
+ for(const options of [{tool:'mask'},{down:{button:5,buttons:32}},{down:{button:2,buttons:2}},{down:{altKey:true}},{key:'AltLeft'}]){const h=paintHarness({tool:options.tool});if(options.key)h.keys.add(options.key);h.send('pointerdown',1,20,20,options.down);h.send('pointerup',1,30,20,{getCoalescedEvents:()=>[{clientX:40,clientY:40,pressure:0,buttons:0}]});assert.ok(h.strokes.every(s=>s.options.erase));assert.equal(h.commits.length,1);h.send('contextmenu',1,30,20);assert.equal(h.cancels(),0)}
+ const h=paintHarness();h.send('pointerdown',1,0,0);h.send('pointermove',1,10,0,{buttons:2});h.send('pointermove',1,20,0,{buttons:1});h.send('contextmenu',1,20,0);h.send('pointerup',1,20,0);assert.deepEqual(h.strokes.map(s=>s.options.erase),[false,true,false]);assert.equal(h.cancels(),0);
+});
+test('Space and middle mouse pan before paint, while ordinary mouse draws at full pressure',()=>{
+ for(const options of [{space:true},{pointerType:'mouse',button:1}]){const h=paintHarness();if(options.space)h.keys.add('Space');h.send('pointerdown',1,30,40,options);h.send('pointermove',1,50,60,options);h.send('pointerup',1,50,60,options);assert.equal(h.begins.length,0);assert.deepEqual(h.camera,{x:-20,y:-20,z:1});assert.equal(h.commits.length,0)}
+ const h=paintHarness();h.send('pointerdown',1,1,2,{pointerType:'mouse',pressure:0});h.send('pointerup',1,4,6,{pointerType:'mouse'});assert.ok(h.strokes.every(s=>s.options.pressure===1));assert.equal(h.commits.length,1);
+});
+test('palm down, move, up, cancel and lost capture cannot interrupt an active pen stroke',()=>{
+ const h=paintHarness();h.send('pointerdown',1,20,20);for(const type of ['pointerdown','pointermove','pointerup','pointercancel','lostpointercapture'])h.send(type,2,60,70,{pointerType:'touch'});
+ assert.equal(h.gesture().type,'paint');assert.equal(h.pointers.size,1);assert.equal(h.cancels(),0);assert.equal(h.rollbacks(),0);h.send('pointermove',1,100,20);h.send('pointerup',1,100,20);assert.equal(h.commits.length,1);assert.deepEqual(h.camera,{x:0,y:0,z:1});
+});
+test('paint cancellation restores the original state without history and the next stroke commits once',()=>{
+ for(const type of ['pointercancel','lostpointercapture']){const h=paintHarness(),before=structuredClone(h.state());h.send('pointerdown',1,20,20);h.send('pointermove',1,80,40);h.send(type,1,80,40);h.send('pointerup',1,80,40);assert.deepEqual(h.state(),before);assert.equal(h.cancels(),1);assert.equal(h.rollbacks(),1);assert.equal(h.commits.length,0);assert.equal(h.pointers.size,0);h.send('pointerdown',2,40,40);h.send('pointerup',2,50,40);assert.equal(h.commits.length,1);assert.deepEqual(h.commits[0],before)}
+});
+test('two touch fingers roll back painting for camera navigation and a new pen takes over a touch gesture',()=>{
+ const h=paintHarness();h.send('pointerdown',1,20,20,{pointerType:'touch'});h.send('pointerdown',2,60,20,{pointerType:'touch'});assert.equal(h.cancels(),1);assert.equal(h.rollbacks(),1);assert.deepEqual(h.state().marks,[]);assert.equal(h.gesture().type,'camera');h.send('pointermove',2,80,20,{pointerType:'touch'});assert.ok(h.camera.z>1);h.send('pointerdown',3,30,30);assert.equal(h.pointers.size,1);assert.equal(h.gesture().type,'paint');h.send('pointerup',1,20,20,{pointerType:'touch'});h.send('pointerup',2,80,20,{pointerType:'touch'});h.send('pointerup',3,40,30);assert.equal(h.commits.length,1);assert.deepEqual(h.commits[0].marks,[]);
+});
+test('legacy asset mask APIs remain available and rejected paint starts no edit',()=>{
+ const h=paintHarness({tool:'mask',legacy:true});h.send('pointerdown',1,20,20);h.send('pointermove',1,50,20);h.send('pointerup',1,50,20);assert.equal(h.legacyBegins(),1);assert.equal(h.commits.length,1);assert.equal(h.begins.length,0);
+ const rejected=paintHarness({reject:true});rejected.send('pointerdown',1,20,20);rejected.send('pointerup',1,50,20);assert.equal(rejected.controller.active(),false);assert.equal(rejected.pointers.size,0);assert.equal(rejected.commits.length,0);assert.deepEqual(rejected.state().marks,[]);
+});

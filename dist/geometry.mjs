@@ -1,3 +1,4 @@
+import {maskRectangles} from './brush.mjs';
 export const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
 export const radians=degrees=>degrees*Math.PI/180;
 export const degrees=angle=>angle*180/Math.PI;
@@ -9,7 +10,15 @@ export function anchorCamera(c,world,screen){const v=rotate({x:screen.x/c.z,y:sc
 export function zoomAt(c,p,z){const world=screenToWorld(p,c);c.z=clamp(z,.25,12);return anchorCamera(c,world,p)}
 export function localToWorld(p,o){const v=rotate({x:p.x-o.w/2,y:p.y-o.h/2},radians(o.rotation||0));return{x:o.x+o.w/2+v.x,y:o.y+o.h/2+v.y}}
 export function worldToLocal(p,o){const v=rotate({x:p.x-o.x-o.w/2,y:p.y-o.y-o.h/2},-radians(o.rotation||0));return{x:v.x+o.w/2,y:v.y+o.h/2}}
-export function contains(o,p,padding=0){const q=worldToLocal(p,o);return q.x>=-padding&&q.x<=o.w+padding&&q.y>=-padding&&q.y<=o.h+padding}
+export function contains(o,p,padding=0){const q=worldToLocal(p,o);if(o.mask)return objectMaskRects(o).some(r=>q.x>=r.x-padding&&q.x<r.x+r.w+padding&&q.y>=r.y-padding&&q.y<r.y+r.h+padding);return q.x>=-padding&&q.x<=o.w+padding&&q.y>=-padding&&q.y<=o.h+padding}
+const maskRectangleCache=new WeakMap();
+export function objectMaskRects(o){
+ if(!o.mask)return[{x:0,y:0,w:o.w,h:o.h}];
+ let source=maskRectangleCache.get(o.mask);if(!source){source=maskRectangles(o.mask);maskRectangleCache.set(o.mask,source)}
+ const c=o.crop||{x:0,y:0,w:1,h:1},sx=c.x*o.mask.w,sy=c.y*o.mask.h,sw=c.w*o.mask.w,sh=c.h*o.mask.h,result=[];
+ for(const r of source){const left=Math.max(sx,r.x),right=Math.min(sx+sw,r.x+r.w),top=Math.max(sy,r.y),bottom=Math.min(sy+sh,r.y+r.h);if(left>=right||top>=bottom)continue;const x=(left-sx)*o.w/sw,w=(right-left)*o.w/sw;result.push({x:o.flip?o.w-x-w:x,y:(top-sy)*o.h/sh,w,h:(bottom-top)*o.h/sh})}
+ return result;
+}
 export function pointBounds(points){const x=Math.min(...points.map(p=>p.x)),y=Math.min(...points.map(p=>p.y));return{x,y,w:Math.max(...points.map(p=>p.x))-x,h:Math.max(...points.map(p=>p.y))-y}}
 export function objectCorners(o,inset=0){return[{x:0,y:inset},{x:o.w,y:inset},{x:o.w,y:o.h},{x:0,y:o.h}].map(p=>localToWorld(p,o))}
 export const objectBounds=o=>pointBounds(objectCorners(o));
@@ -37,7 +46,7 @@ function drawArtwork(ctx,o,image){
  // terrain shapes cost perimeter work rather than one draw per square pixel.
  if(artworkRepeat(ctx,image,{x:s.x+tile,y:s.y+tile,w:tile,h:tile},o.w,o.h)){for(let col=0;col<cols;col++){drawCell(0,col);if(rows>1)drawCell(rows-1,col)}for(let row=1;row<rows-1;row++){drawCell(row,0);if(cols>1)drawCell(row,cols-1)}}else for(let row=0;row<rows;row++)for(let col=0;col<cols;col++)drawCell(row,col);
 }
-export function drawObject(ctx,o,image,{alpha=1,fill='#fff',stroke=null,lineWidth=1}={}){if(o.collisionOnly)return;ctx.save();ctx.globalAlpha=alpha*(o.opacity??1);applyObjectTransform(ctx,o);if(image){image=adjustedImage(image,o.adjust);if(o.artwork)drawArtwork(ctx,o,image);else{if(o.flip){ctx.translate(o.w,0);ctx.scale(-1,1)}const crop=o.crop||{x:0,y:0,w:1,h:1},w=image.naturalWidth||image.width,h=image.naturalHeight||image.height;ctx.drawImage(image,crop.x*w,crop.y*h,crop.w*w,crop.h*h,0,0,o.w,o.h)}}else{ctx.fillStyle=adjustedColor(o.color||fill,o.adjust);if(o.kind==='ladder'){const rail=Math.max(1,Math.min(2,o.w/4));ctx.fillRect(0,0,rail,o.h);ctx.fillRect(o.w-rail,0,rail,o.h);for(let y=2;y<o.h;y+=6)ctx.fillRect(rail,y,o.w-2*rail,Math.min(2,o.h-y))}else ctx.fillRect(0,0,o.w,o.h);if(stroke&&o.kind!=='ladder'){ctx.strokeStyle=stroke;ctx.lineWidth=lineWidth;ctx.strokeRect(0,0,o.w,o.h)}}ctx.restore()}
+export function drawObject(ctx,o,image,{alpha=1,fill='#fff',stroke=null,lineWidth=1}={}){if(o.collisionOnly)return;ctx.save();ctx.globalAlpha=alpha*(o.opacity??1);applyObjectTransform(ctx,o);if(o.mask){ctx.beginPath();for(const r of objectMaskRects(o))ctx.rect(r.x,r.y,r.w,r.h);ctx.clip();ctx.imageSmoothingEnabled=false}if(image){image=adjustedImage(image,o.adjust);if(o.artwork)drawArtwork(ctx,o,image);else{if(o.flip){ctx.translate(o.w,0);ctx.scale(-1,1)}const crop=o.crop||{x:0,y:0,w:1,h:1},w=image.naturalWidth||image.width,h=image.naturalHeight||image.height;ctx.drawImage(image,crop.x*w,crop.y*h,crop.w*w,crop.h*h,0,0,o.w,o.h)}}else{ctx.fillStyle=adjustedColor(o.color||fill,o.adjust);if(o.kind==='ladder'){const rail=Math.max(1,Math.min(2,o.w/4));ctx.fillRect(0,0,rail,o.h);ctx.fillRect(o.w-rail,0,rail,o.h);for(let y=2;y<o.h;y+=6)ctx.fillRect(rail,y,o.w-2*rail,Math.min(2,o.h-y))}else ctx.fillRect(0,0,o.w,o.h);if(stroke&&o.kind!=='ladder'){ctx.strokeStyle=stroke;ctx.lineWidth=lineWidth;ctx.strokeRect(0,0,o.w,o.h)}}ctx.restore()}
 
 export function resizeFromCorner(o,w,h){const corner=localToWorld({x:0,y:0},o),offset=rotate({x:w/2,y:h/2},radians(o.rotation||0));o.inset=clamp((o.inset||0)*h/o.h,0,h-1);Object.assign(o,{x:corner.x+offset.x-w/2,y:corner.y+offset.y-h/2,w,h});return o}
 export function snapObject(o,grid=1,{dimensions=false}={}){if(o.locked)return o;grid=[1,4,8,16].includes(grid)?grid:1;if(dimensions){o.w=clamp(Math.round(o.w),1,8192);o.h=clamp(Math.round(o.h),1,8192)}o.x=Math.round(o.x/grid)*grid;o.y=Math.round(o.y/grid)*grid;o.inset=clamp(Math.round(o.inset||0),0,o.h-1);o.rotation=Math.round((o.rotation||0)/5)*5;return o}

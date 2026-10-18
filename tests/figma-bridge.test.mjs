@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {figmaPluginMain} from '../dist/figma-plugin.mjs';
 import {mergeFigmaReturn,readFigmaReturn} from '../dist/figma-bridge.mjs';
-import {validateProject,bounds} from '../dist/engine.mjs';
+import {validateProject,bounds,platforms} from '../dist/engine.mjs';
 import {editProject,projectDiff} from '../dist/agent.mjs';
 import {hasProjectChanges} from '../dist/project-state.mjs';
 import {encodePNG,dataURL} from '../dist/png.mjs';
@@ -62,4 +62,22 @@ test('large Unicode level metadata is chunked and returns intact',async()=>{
 
 test('nested Figma groups retain piece identity, collision and inherited opacity',async()=>{
  const f=await fixture(),floor=f.root.children.find(n=>n.name==='Floor'),vine=f.root.children.find(n=>n.name==='Fern'),outer=f.figma.createFrame(),inner=f.figma.createFrame();f.root.appendChild(outer);outer.appendChild(inner);inner.appendChild(floor);inner.appendChild(vine);outer.x=20;outer.y=10;inner.x=3;inner.y=4;outer.opacity=.5;const result=readFigmaReturn(await f.export()).project;assert.equal(result.objects.length,project.objects.length);assert.equal(result.objects.find(o=>o.id==='floor').kind,'solid');assert.equal(result.objects.find(o=>o.id==='vine').x,project.objects[1].x+23);assert.equal(result.objects.find(o=>o.id==='vine').opacity,.3);
+});
+
+test('native masks remain exact through Figma appearance instances, movement and duplication',async()=>{
+ const f=await fixture(),mask={w:4,h:4,runs:[[0,0,4],[1,0,1],[1,3,4],[2,0,1],[2,3,4],[3,0,4]]},masked=editProject(project,[{type:'update',id:'floor',changes:{mask}}]);
+ await f.figma.ui.onmessage({type:'import',data:{format:'pixel-mill-figma',version:1,project:masked,rasters:[{id:'fern',w:2,h:2,src:png}],appearances:[{id:'floor',w:120,h:12,src:png}],bounds:bounds(masked.objects,masked.spawn)}});f.root=f.page.selection[0];assert.deepEqual(readFigmaReturn(await f.export()).project,masked);
+ const floor=f.root.children.find(n=>n.name==='Floor');assert.equal(floor.type,'INSTANCE');floor.x+=9;const copy=floor.clone();f.root.appendChild(copy);copy.x+=130;
+ const result=readFigmaReturn(await f.export()).project;assert.deepEqual(result.objects[0].mask,mask);assert.deepEqual(result.objects.at(-1).mask,mask);assert.equal(result.objects[0].x,masked.objects[0].x+9);assert.notEqual(result.objects.at(-1).id,'floor');
+});
+
+test('repainted cropped mask rebases its native source while preserving flipped rotated collisions and holes',async()=>{
+ const f=await fixture(),mask={w:8,h:8,runs:Array.from({length:8},(_,y)=>y===3||y===4?[[y,0,3],[y,5,8]]:[[y,0,8]]).flat()},cropped=editProject(project,[{type:'update',id:'vine',changes:{mask,kind:'solid'}},{type:'crop',id:'vine',rect:{x:3,y:5,w:6,h:10}}]);
+ await f.figma.ui.onmessage({type:'import',data:{format:'pixel-mill-figma',version:1,project:cropped,rasters:[{id:'fern',w:2,h:2,src:png}],appearances:[{id:'vine',w:6,h:10,src:png}],bounds:bounds(cropped.objects,cropped.spawn)}});f.root=f.page.selection[0];const node=f.root.children.find(n=>n.name==='Fern'),component=await node.getMainComponentAsync();component.fills=[{type:'SOLID',color:{r:0,g:1,b:0}}];
+ const returned=readFigmaReturn(await f.export()).project,changed=returned.objects.find(o=>o.id==='vine');assert.equal(changed.crop,null);assert.equal(changed.flip,true);assert.notEqual(changed.asset,'fern');assert.deepEqual(changed.mask,{w:4,h:4,runs:[[0,0,4],[1,0,1],[1,3,4],[2,0,1],[2,3,4],[3,0,4]]});assert.deepEqual(platforms(returned.objects),platforms(cropped.objects));assert.deepEqual(returned.assets[0],cropped.assets[0]);
+});
+
+test('repaint rejects a fractional native crop boundary instead of silently shifting a mask',async()=>{
+ const f=await fixture(),mask={w:8,h:8,runs:Array.from({length:8},(_,y)=>[y,0,8])},cropped=editProject(project,[{type:'update',id:'vine',changes:{mask}},{type:'crop',id:'vine',rect:{x:1,y:1,w:6,h:10}}]);
+ await f.figma.ui.onmessage({type:'import',data:{format:'pixel-mill-figma',version:1,project:cropped,rasters:[{id:'fern',w:2,h:2,src:png}],appearances:[{id:'vine',w:6,h:10,src:png}],bounds:bounds(cropped.objects,cropped.spawn)}});f.root=f.page.selection[0];const node=f.root.children.find(n=>n.name==='Fern'),component=await node.getMainComponentAsync(),original=component.fills;component.fills=[{type:'SOLID',color:{r:1,g:0,b:0}}];await assert.rejects(()=>f.export(),/would shift its cropped mask/);component.fills=original;assert.deepEqual(readFigmaReturn(await f.export()).project,cropped);
 });

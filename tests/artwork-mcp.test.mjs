@@ -56,6 +56,13 @@ test('real HTTP MCP handoff, coherent PNG apply, region isolation, stale layout 
  result=await tool('get_artwork_request',{requestId:request.id,includeImages:true});assert.equal(result.isError,undefined);const frozen=await decodePNG(pngBytes('data:image/png;base64,'+result.content[1].data));assert.deepEqual(frozen.pixels,map.pixels);
 });
 
+test('HTTP MCP retains drawn masks and erased holes through generation handoff, apply and undo',async t=>{
+ const original=await fixture(),floor=original.objects.find(o=>o.id==='floor');floor.mask={w:4,h:2,runs:[[0,0,1],[0,3,4],[1,0,4]]};const {tool,state}=await httpRoom(t,original),prepared=await tool('prepare_artwork',{revision:0,objectIds:['floor'],includeImages:true});assert.equal(prepared.isError,undefined);const request=prepared.structuredContent.request;assert.deepEqual(request.objects[0].mask,floor.mask);
+ const image=prepared.content.find(item=>item.type==='image'),map=await decodePNG(pngBytes('data:image/png;base64,'+image.data));assert.equal(map.pixels[(Math.floor(map.h/4)*map.w+Math.floor(map.w/2))*4+3],0);assert.equal(map.pixels[(Math.floor(map.h*3/4)*map.w+Math.floor(map.w/2))*4+3],255);
+ const applied=await tool('apply_artwork',{revision:1,requestId:request.id,dataUrl:await png(request.width,request.height)});assert.equal(applied.isError,undefined);const level=await state();assert.deepEqual(level.objects.find(o=>o.id==='floor').mask,floor.mask);assert.deepEqual(platforms(level.objects),platforms(original.objects));
+ const undone=await tool('undo_level',{revision:2});assert.equal(undone.isError,undefined);assert.deepEqual(withoutArt(undone.structuredContent),withoutArt(original));
+});
+
 test('direct sheet treatment reuses the source and preserves geometry; metadata patches and undo survive',async t=>{
  const original=await fixture(),{tool,state}=await httpRoom(t,original);
  const roles={platform:{x:0,y:0,w:48,h:48,mode:'terrain'},background:{x:16,y:16,w:16,h:16,mode:'tile'},decoration:{x:32,y:0,w:16,h:16,mode:'stretch'}};

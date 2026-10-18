@@ -41,7 +41,7 @@ export function installWorkspaces(api){
  $('canvas').addEventListener('pointerdown',closeColor,{passive:true});
  function updateImport(){const pieces=$('import-kind').value==='pieces';for(const el of document.querySelectorAll('.import-advanced'))el.hidden=!pieces}
  $('import-kind').onchange=updateImport;updateImport();
- $('prepare-artwork').onclick=()=>perform(async()=>{const result=await api.prepareArtwork({assetIds:selectedIds(),objectIds:scope()});pendingRequestId=result?.id||result?.request?.id||result?.requestId||api.getRequest?.()?.id;refresh()});
+ $('prepare-artwork').onclick=()=>perform(async()=>{const ids=selectedIds(),result=await api.prepareArtwork({...(ids.length?{assetIds:ids}:{}),objectIds:scope()});pendingRequestId=result?.id||result?.request?.id||result?.requestId||api.getRequest?.()?.id;refresh()});
  $('apply-selected-sheets').onclick=()=>perform(async()=>{const ids=selectedIds();if(!ids.length){show('assets');api.message('Choose a sheet, then apply it to your sketch.');return}await api.applySelectedSheets({assetIds:ids,objectIds:scope()});api.message('Sheets applied · Undo to restore')});
  $('apply-artwork').onclick=()=>$('artwork-file').click();
  $('artwork-file').onchange=e=>{const file=e.target.files[0];e.target.value='';if(file)void perform(async()=>{await api.applyArtwork(file,pendingRequestId);api.message('Artwork applied · Layout preserved · Undo to restore')})};

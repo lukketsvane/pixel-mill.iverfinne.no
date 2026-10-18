@@ -30,6 +30,12 @@ export function figmaPluginMain(){
  }
  function levelRoot(){for(const selected of figma.currentPage.selection){let n=selected;while(n&&n.type!=='PAGE'){if(get(n,'level'))return n;n=n.parent}}const candidates=figma.currentPage.children.filter(n=>get(n,'level'));if(candidates.length===1)return candidates[0];throw Error('Select a Pixel Mill Level frame first.')}
  async function png(node){const copy=node.clone(),frame=figma.createFrame();try{frame.fills=[];frame.clipsContent=true;frame.resize(Math.ceil(node.width),Math.ceil(node.height));copy.locked=false;frame.appendChild(copy);copy.relativeTransform=identity;copy.opacity=1;copy.visible=true;const bytes=await frame.exportAsync({format:'PNG',constraint:{type:'SCALE',value:1}});return'data:image/png;base64,'+figma.base64Encode(bytes)}finally{frame.remove();if(!copy.removed)copy.remove()}}
+ function rebaseMask(o){
+  if(!o.mask||!o.crop)return;const m=o.mask,c=o.crop,edges=[c.x*m.w,c.y*m.h,(c.x+c.w)*m.w,(c.y+c.h)*m.h];
+  if(edges.some(value=>Math.abs(value-Math.round(value))>1e-6))throw Error('Repainting '+o.name+' would shift its cropped mask. Keep crop edges on native mask pixels or restore its original appearance.');
+  const [x,y,right,bottom]=edges.map(Math.round);if(right<=x||bottom<=y)throw Error('The cropped mask must contain at least one native pixel.');
+  o.mask={w:right-x,h:bottom-y,runs:m.runs.filter(([row,left,end])=>row>=y&&row<bottom&&end>x&&left<right).map(([row,left,end])=>[row-y,Math.max(left,x)-x,Math.min(end,right)-x])};
+ }
  async function exportLevel(){
   const root=levelRoot(),meta=get(root,'level'),base=clone(meta.base),b=meta.bounds;
   for(const a of base.assets)if(meta.sources[a.id]){const source=figma.getImageByHash(meta.sources[a.id]);if(!source)throw Error('An original image is missing. Reimport the source kit into a new frame.');a.src='data:image/png;base64,'+figma.base64Encode(await source.getBytesAsync())}
@@ -43,6 +49,7 @@ export function figmaPluginMain(){
     if(o.collisionOnly){const sx=g.w/o.w,sy=g.h/o.h;if(Math.abs(sx-sy)>1e-5||Math.abs(g.rotation)>1e-5||g.flip)throw Error('Painted collision can move or scale uniformly. Keep its rotation and reflection unchanged.');o.points=o.points.map(p=>({x:p.x*sx,y:p.y*sy}));o.brushWidth*=sx}
     let fillOpacity=1;const changed=original&&(get(node,'visual')||get(sourceComponent,'visual'))!==signature(node);o.kind=get(node,'kind')||o.kind;
     if(!o.collisionOnly&&(changed||!original)){let c=null;if(node.type==='INSTANCE')c=get(await node.getMainComponentAsync(),'component');const fill=Array.isArray(node.fills)&&node.fills.length===1?node.fills[0]:null;
+     rebaseMask(o);
      if(!changed&&c?.assetId&&base.assets.some(a=>a.id===c.assetId)&&library?.children.some(a=>get(a,'component')?.assetId===c.assetId&&get(a,'visual')===signature(a))){o.asset=c.assetId}
      else if(node.type==='RECTANGLE'&&fill?.type==='SOLID'&&!node.effects?.length&&!node.strokes?.length&&!node.cornerRadius){o.asset=null;fillOpacity=fill.opacity??1;o.color='#'+[fill.color.r,fill.color.g,fill.color.b].map(v=>Math.round(v*255).toString(16).padStart(2,'0')).join('')}
      else{o.asset=await appearance(node);delete o.color}

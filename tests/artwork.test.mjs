@@ -41,6 +41,28 @@ test('request snapshot and image references cannot silently change after handoff
  moved.assets[0].src=await makePNG(16,16,[255,0,0,255]);await assert.rejects(()=>getArtworkRequest(moved,{requestId:'frozen'}),/reference changed/);
 });
 
+test('painted masks preserve transparent holes, frozen requests and collision through artwork and undo',async()=>{
+ const mask={w:6,h:6,runs:[[0,0,6],[1,0,6],[2,0,2],[2,4,6],[3,0,2],[3,4,6],[4,0,6],[5,0,6]]},original=project([shape('paint',0,0,6,6,'platform',{mask})]),prepared=await prepareArtwork(original,{id:'painted'}),decoded=await decodePNG(pngBytes(prepared.request.map));
+ assert.deepEqual(prepared.request.objects[0].mask,mask);assert.notEqual(prepared.project.objects[0].mask,prepared.project.artRequests[0].objects[0].mask);assert.match(prepared.request.instructions,/ChatGPT image generation/);assert.match(prepared.request.instructions,/erased holes/);
+ for(let y=0;y<6;y++)for(let x=0;x<6;x++)assert.deepEqual([...decoded.pixels.slice((y*6+x)*4,(y*6+x+1)*4)],x>=2&&x<4&&y>=2&&y<4?[0,0,0,0]:[145,232,193,255]);
+ const source=await makePNG(6,6),applied=await applyArtwork(prepared.project,{requestId:'painted',dataUrl:source,id:'painted-source'});assert.deepEqual(applied.project.objects.map(withoutArt),original.objects);assert.deepEqual(platforms(applied.project.objects),platforms(original.objects));assert.equal(applied.project.assets[0].src,source);assert.deepEqual(applyDiff(applied.project,projectDiff(applied.project,prepared.project)),prepared.project);
+ for(const mutate of [o=>o.mask.runs[0][2]--,o=>delete o.mask,o=>o.crop={x:0,y:0,w:.5,h:1},o=>o.flip=true]){const changed=structuredClone(prepared.project);mutate(changed.objects[0]);assert.equal((await getArtworkRequest(changed,{requestId:'painted'})).map,prepared.request.map);await assert.rejects(()=>applyArtwork(changed,{requestId:'painted',dataUrl:source}),/sketch changed/)}
+ const changed=structuredClone(prepared.project);changed.objects[0].mask.runs[0][2]--;assert.deepEqual(applyDiff(prepared.project,projectDiff(prepared.project,changed)),validateProject(changed));
+});
+
+test('semantic masks follow crop, flip, rotation and reveal lower layers through erased holes',async()=>{
+ const mask={w:4,h:4,runs:[[1,1,2]]},cropped=shape('paint',0,0,2,2,'decoration',{mask,crop:{x:.25,y:.25,w:.5,h:.5},flip:true,rotation:90}),prepared=await prepareArtwork(project([cropped]),{id:'transformed-mask'}),png=await decodePNG(pngBytes(prepared.request.map));assert.deepEqual([png.w,png.h],[2,2]);assert.deepEqual([...png.pixels],[0,0,0,0,0,0,0,0,0,0,0,0,245,161,92,255]);
+ const layered=await prepareArtwork(project([shape('back',0,0,2,2,'background'),cropped]),{id:'layered-mask'}),image=await decodePNG(pngBytes(layered.request.map));assert.deepEqual([...image.pixels.slice(0,4)],[107,159,232,255]);assert.deepEqual([...image.pixels.slice(12,16)],[245,161,92,255]);
+ const changed=structuredClone(prepared.project),source=await makePNG(2,2);delete changed.objects[0].crop;await assert.rejects(()=>applyArtwork(changed,{requestId:'transformed-mask',dataUrl:source}),/sketch changed/);
+});
+
+test('generation defaults to visible placed source assets and explicit references take precedence',async()=>{
+ const src=await makePNG(4,4),assets=['unused','placed','invisible','treatment'].map(id=>({id,name:id,w:4,h:4,src,...(id==='treatment'?{hidden:true}:{})})),base=project([shape('paint',0,0,4,4),{...shape('sprite',8,0,4,4),asset:'placed',color:undefined},{...shape('hidden',16,0,4,4),asset:'invisible',color:undefined,opacity:0}],assets);
+ const treated=applyAssetSheet(base,{assetId:'treatment',objectIds:['paint'],tileSize:4}).project,prepared=await prepareArtwork(treated,{id:'active-assets',includeImages:false});assert.deepEqual(prepared.request.assetIds,['placed','treatment']);
+ const {prepareAssetArtwork}=await import('../dist/artwork.mjs');assert.deepEqual((await prepareAssetArtwork(treated,{assetId:'unused',id:'active-asset-style',includeImages:false})).request.assetIds,['placed','treatment']);
+ treated.assets[0].selectedForGeneration=true;assert.deepEqual((await prepareArtwork(treated,{id:'selected-assets',includeImages:false})).request.assetIds,['unused']);assert.deepEqual((await prepareArtwork(treated,{id:'explicit-assets',assetIds:['placed'],includeImages:false})).request.assetIds,['placed']);assert.deepEqual((await prepareArtwork(treated,{id:'no-assets',assetIds:[],includeImages:false})).request.assetIds,[]);
+});
+
 test('direct sheet application selects terrain edges and joins, preserves source pixels, and needs no generated asset',async()=>{
  const src=await makePNG(48,48),base=project([shape('left',0,0,32,32),shape('right',32,0,32,32),shape('bg',0,-32,64,32,'background')],[{id:'tiles',name:'Terrain',w:48,h:48,src,sheet:{tileSize:16,role:'platform',terrain:{x:0,y:0,tileSize:16}}}]),result=applyAssetSheet(base,{assetId:'tiles'});
  assert.equal(result.project.assets.length,1);assert.equal(result.project.assets[0].src,src);assert.deepEqual(platforms(result.project.objects),platforms(base.objects));assert.deepEqual(result.project.objects.map(withoutArt),base.objects);assert.equal(result.project.objects[0].artwork.mode,'terrain');assert.deepEqual(result.project.objects[0].artwork.joins.right,[[0,32]]);assert.deepEqual(result.project.objects[1].artwork.joins.left,[[0,32]]);assert.equal(result.project.objects[2].artwork,undefined);

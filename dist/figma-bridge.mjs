@@ -19,8 +19,8 @@ export async function createFigmaTransfer(raw,images=new Map()){
  const project=validateProject(raw),rasters=[],appearances=[],cache=new Map(images),variants=new Map();
  for(const asset of project.assets){const raster=asset.spriteSheet?await exportSpriteSheet(asset,{},project.assets):asset;rasters.push({id:asset.id,w:raster.w,h:raster.h,src:raster.src});if(!cache.has(asset.id))cache.set(asset.id,await decode(raster.src))}
  for(const object of project.objects){
-  if(object.collisionOnly||!object.artwork&&!object.crop&&!object.adjust&&(object.asset||object.kind!=='ladder'))continue;
-  const visual={...object,x:0,y:0,rotation:0,flip:false,opacity:1},key=JSON.stringify([object.asset,object.artwork,object.crop,object.adjust,object.color,object.kind,object.w,object.h]);
+  if(object.collisionOnly||!object.mask&&!object.artwork&&!object.crop&&!object.adjust&&(object.asset||object.kind!=='ladder'))continue;
+  const visual={...object,x:0,y:0,rotation:0,flip:false,opacity:1},key=JSON.stringify([object.asset,object.mask,object.artwork,object.crop,object.adjust,object.color,object.kind,object.w,object.h]);
   if(variants.has(key)){appearances.push({id:object.id,reuse:variants.get(key)});continue}
   const w=Math.ceil(object.w),h=Math.ceil(object.h);if(w>4096||h>4096||w*h>16000000)throw Error('A treated piece exceeds the Figma image limit. Split it into pieces of at most 4096 pixels per side before exporting.');
   const canvas=imageCanvas(w,h),ctx=canvas.getContext('2d');ctx.imageSmoothingEnabled=false;ctx.scale(w/object.w,h/object.h);drawObject(ctx,visual,cache.get(object.artwork?.asset||object.asset));

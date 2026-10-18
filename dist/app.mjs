@@ -15,12 +15,16 @@ import {exportFigmaKit,mergeFigmaReturn} from './figma-bridge.mjs';
 import {uid,decode,importImages,snapshot,saveProject as saveProjectFile,readProject,exportProject,exportArtworkRequest} from './io.mjs';
 import {validateProject} from './engine.mjs';
 import {hsbToHex} from './color.mjs';
-import {prepareArtwork,getArtworkRequest,applyArtwork,applyAssetSheet,prepareAssetArtwork,getAssetArtworkRequest,applyAssetArtwork} from './artwork.mjs';
+import {prepareArtwork,getArtworkRequest,applyArtwork,applyAssetSheet,prepareAssetArtwork,getAssetArtworkRequest,applyAssetArtwork,semanticRole} from './artwork.mjs';
+import {strokeMask} from './brush.mjs';
+import {appendStroke,eraseStroke} from './paint-tools.mjs';
+import {shortcuts,resolveShortcut,installCommandPalette} from './shortcuts.mjs';
 import {exportSpriteSheet} from './spritesheets.mjs';
 import {installWorkspaces} from './workspaces.mjs';
 import {installSpriteWorkspace} from './sprite-workspace.mjs';
 const $=s=>document.querySelector(s),$$=s=>[...document.querySelectorAll(s)];
 const icons={chat:'M4 4h16v12H9l-5 4Z',menu:'M4 6h16M4 12h16M4 18h16',plus:'M12 4v16M4 12h16',cursor:'m5 3 14 10-7 1-3 7Z',hand:'M7 12V7a1.5 1.5 0 0 1 3 0v5-8a1.5 1.5 0 0 1 3 0v8-7a1.5 1.5 0 0 1 3 0v7-5a1.5 1.5 0 0 1 3 0v7c0 4-2 7-6 7h-1c-3 0-4-2-6-4l-3-4a1.5 1.5 0 0 1 2-2l2 2',block:'M4 4h16v16H4zM4 9h16',collision:'M3 17c5-11 8 9 13-2 1-3 3-4 5-4M4 21h16',eraser:'m3 15 9-11 9 8-7 8H8zM12 20h9',spawn:'M9 3h6v6H9zM6 12h12M12 9v7m0 0-5 5m5-5 5 5',play:'m8 4 12 8-12 8Z',stop:'M6 6h12v12H6z',undo:'M8 4 3 9l5 5M3 9h10a7 7 0 0 1 0 14',fit:'M4 9V4h5m6 0h5v5m0 6v5h-5M9 20H4v-5',layers:'m3 7 9-4 9 4-9 4Zm0 5 9 4 9-4M3 17l9 4 9-4',close:'m6 6 12 12M6 18 18 6',sliders:'M4 7h6m4 0h6M4 17h10m4 0h2M10 4v6m4 4v6',copy:'M9 9h11v11H9zM5 15H3V3h12v2',trash:'M3 6h18M9 6V3h6v3M6 6l1 15h10l1-15M10 10v7m4-7v7',left:'m15 5-7 7 7 7',right:'m9 5 7 7-7 7',jump:'M12 20V4m-6 6 6-6 6 6',restart:'M4 10a8 8 0 1 1 1 7M4 3v7h7'};
+icons.brush='m14 3 7 7-10 10H4v-7Zm-9 17-2 1 1-6m8-10 7 7';
 function icon(el,name){el.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${icons[name]}"></path></svg>`}
 $$('[data-icon]').forEach(el=>icon(el,el.dataset.icon));
 const app=$('#app'),canvas=$('#canvas'),ctx=canvas.getContext('2d',{alpha:false}),pixelBuffer=document.createElement('canvas');let paint=ctx,pixelView=true;
@@ -29,14 +33,15 @@ let input=null,playControls=null,shared=null,autosave=null,localRevision=0,works
 let sketchRole='platform',sketchColor='#91e8c1',regionIds=null;
 let cropping=false,opacityBefore=null,numberScrub=null,scrubEdit=null,assetTray=null,assetRows=1,expandedAssetGroup=null;
 let selected=null,tool='select',brush=null,grid=4,gesture=null,playing=false,player=null,colliders=[],editorCamera=null,importing=false;
-let blockHSB={h:153,s:38,b:91},collisionWidth=8,maskWidth=12,maskEdit=null,adjustBefore=null,colorScope='selected',assetPress=null;
+let blockHSB={h:153,s:38,b:91},collisionWidth=8,maskWidth=24,paintWidth=24,penPressure=true,eraseAll=false,paintEdit=null,maskEdit=null,adjustBefore=null,colorScope='selected',assetPress=null;
 let history=[],future=[],images=new Map(),keys=new Set(),pointers=new Map(),touches=new Map(),hover=null,accumulator=0,lastTime=0;
-function saveViewPrefs(){try{localStorage.setItem('pixel-mill-view',JSON.stringify({pixelView,grid,assetRows,blockHSB}))}catch{}}
+function saveViewPrefs(){try{localStorage.setItem('pixel-mill-view',JSON.stringify({pixelView,grid,assetRows,blockHSB,paintWidth,maskWidth,penPressure,eraseAll}))}catch{}}
 try{const prefs=JSON.parse(localStorage.getItem('pixel-mill-view')||'{}');pixelView=prefs.pixelView!==false;if([1,4,8,16].includes(prefs.grid))grid=prefs.grid;if([1,2,4].includes(prefs.assetRows))assetRows=prefs.assetRows;$('#pixel-view').checked=pixelView;$('#grid').value=grid;const c=prefs.blockHSB;if(c&&Number.isInteger(c.h)&&c.h>=0&&c.h<=359&&Number.isInteger(c.s)&&c.s>=0&&c.s<=100&&Number.isInteger(c.b)&&c.b>=0&&c.b<=100)blockHSB=c}catch{}
 function blockColor(){return sketchColor}
 function setSketchColor(color){sketchColor=color;const [r,g,b]=[1,3,5].map(i=>parseInt(color.slice(i,i+2),16)/255),hi=Math.max(r,g,b),lo=Math.min(r,g,b),d=hi-lo;const h=!d?0:hi===r?((g-b)/d+6)%6:hi===g?(b-r)/d+2:(r-g)/d+4;blockHSB={h:Math.round(h*60)%360,s:Math.round(hi?d/hi*100:0),b:Math.round(hi*100)};updateBlockPicker();saveViewPrefs()}
 function updateBlockPicker(){for(const [key,id] of [['h','hue'],['s','saturation'],['b','brightness']])$('#block-'+id).value=blockHSB[key];$('#block-swatch').style.backgroundColor=blockColor();$('#block-swatch').value=blockColor();$('#block-hue').style.background='linear-gradient(90deg,red,yellow,lime,cyan,blue,magenta,red)';$('#block-saturation').style.background=`linear-gradient(90deg,${hsbToHex(blockHSB.h,0,blockHSB.b)},${hsbToHex(blockHSB.h,100,blockHSB.b)})`;$('#block-brightness').style.background=`linear-gradient(90deg,#000,${hsbToHex(blockHSB.h,blockHSB.s,100)})`}
 updateBlockPicker();
+try{const prefs=JSON.parse(localStorage.getItem('pixel-mill-view')||'{}');if(Number.isInteger(prefs.paintWidth))paintWidth=clamp(prefs.paintWidth,1,256);if(Number.isInteger(prefs.maskWidth))maskWidth=clamp(prefs.maskWidth,1,256);penPressure=prefs.penPressure!==false;eraseAll=prefs.eraseAll===true}catch{}
 for(const [key,id] of [['h','hue'],['s','saturation'],['b','brightness']])$('#block-'+id).oninput=e=>{blockHSB[key]=Number(e.target.value);sketchColor=hsbToHex(blockHSB.h,blockHSB.s,blockHSB.b);updateBlockPicker();workspaces?.refresh();saveViewPrefs()};
 $('#close-block-color').onclick=()=>$('#block-color').hidden=true;
 const maxSheet=new Image();maxSheet.src='./assets/max.png';let maxReady=false;maxSheet.onload=()=>maxReady=true;maxSheet.onerror=()=>message('Max could not load. Reload to try again.');
@@ -58,8 +63,11 @@ $('#color-close').onclick=()=>{$('#color-toolbar').hidden=true;$('#color-button'
 $('#color-scope').onclick=()=>{colorScope=colorScope==='selected'?'all':current()?'selected':'all';syncColorSliders()};
 for(const key of ['hue','saturation','brightness','black','white']){const field=$('#color-'+key);field.oninput=e=>{const targets=colorTargets();if(!targets.length)return;if(!adjustBefore)adjustBefore=snapshot(state);const value=Number(e.target.value);for(const o of targets){o.adjust={hue:0,saturation:0,brightness:0,black:0,white:255,...o.adjust,[key]:value};if(o.adjust.white<=o.adjust.black){if(key==='black')o.adjust.white=Math.min(255,value+1);else o.adjust.black=Math.max(0,value-1)}}};field.onchange=()=>{if(adjustBefore){if(JSON.stringify(adjustBefore)!==JSON.stringify(snapshot(state)))checkpoint(adjustBefore);adjustBefore=null}syncColorSliders()}}
 $('#color-reset').onclick=()=>{const targets=colorTargets();if(!targets.some(o=>o.adjust))return;const before=snapshot(state);for(const o of targets)delete o.adjust;checkpoint(before);syncColorSliders()};
-function setTool(next){if(input?.active())input.cancel();cropping=false;$('#context-menu').hidden=true;$('#block-color').hidden=true;tool=next;$('#brush-options').hidden=!['mask','collision'].includes(next);if(!$('#brush-options').hidden){$('#brush-size').value=next==='mask'?maskWidth:collisionWidth;$('#brush-value').textContent=$('#brush-size').value+' px'}brush=next==='stamp'?brush:null;if(next!=='mask')selected=null;$$('[data-tool]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tool===next)));$('#hint').textContent=next==='block'?'Draw '+sketchRole+' shapes':next==='region'?'Drag around the area to treat':next==='collision'?'Paint collision · hidden in game':next==='mask'?'Draw over pixels to erase · select an asset first':next==='spawn'?'Tap to place Max':next==='stamp'?'Tap to place · Esc to select':'';canvas.style.cursor=next==='pan'?'grab':next==='select'?'default':'crosshair';refresh();renderPalette()}
-$$('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));$('#brush-size').oninput=e=>{const value=Number(e.target.value);if(tool==='mask')maskWidth=value;else collisionWidth=value;$('#brush-value').textContent=value+' px'};
+function activeBrushSize(){return tool==='mask'?maskWidth:tool==='collision'?collisionWidth:paintWidth}
+function updateBrush(){const size=activeBrushSize(),painting=['paint','mask','collision'].includes(tool);$('#brush-options').hidden=!painting;$('#brush-size').max=tool==='collision'?128:256;$('#brush-number').max=$('#brush-size').max;$('#brush-size').value=size;$('#brush-number').value=size;$('#brush-value').textContent=tool==='mask'?'Eraser':'Brush';$('#brush-pressure').checked=penPressure;$('#erase-all').checked=eraseAll;$('#erase-scope').hidden=tool!=='mask';$('#brush-layer').textContent=sketchRole==='platform'?'Walkable':sketchRole==='background'?'Background':'Decoration'}
+function changeBrush(value){value=Math.round(clamp(Number(value)||1,1,tool==='collision'?128:256));if(tool==='mask')maskWidth=value;else if(tool==='collision')collisionWidth=value;else paintWidth=value;updateBrush();saveViewPrefs()}
+function setTool(next){if(input?.active())input.cancel();cropping=false;$('#context-menu').hidden=true;$('#block-color').hidden=true;tool=next;updateBrush();brush=next==='stamp'?brush:null;if(next!=='mask')selected=null;$$('[data-tool]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tool===next)));$('#hint').textContent=next==='paint'?'Draw masks · 1 Ground · 2 Background · 3 Decor · Alt / pen button to erase':next==='block'?'Draw '+sketchRole+' rectangles':next==='region'?'Drag around the area to treat':next==='collision'?'Paint collision · hidden in game':next==='mask'?'Erase '+(eraseAll?'all unlocked layers':current()?.asset?'selected image':sketchRole+' masks')+' · Shift+E changes scope':next==='spawn'?'Tap to place Max':next==='stamp'?'Tap to place · Esc to select':'';canvas.style.cursor=['paint','mask','collision'].includes(next)?'none':next==='pan'?'grab':next==='select'?'default':'crosshair';refresh();renderPalette()}
+$$('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));$('#brush-size').oninput=e=>changeBrush(e.target.value);$('#brush-number').onchange=e=>changeBrush(e.target.value);$('#brush-pressure').onchange=e=>{penPressure=e.target.checked;saveViewPrefs()};$('#erase-all').onchange=e=>{eraseAll=e.target.checked;saveViewPrefs();setTool(tool)};
 const imageSources=new Map();
 async function cacheAssets(assets,{guard=()=>true}={}){
  const byId=new Map(assets.map(a=>[a.id,a]));
@@ -104,8 +112,8 @@ $('#flip').onclick=()=>changePiece(o=>o.flip=!o.flip);
 function duplicate(){cancelGesture();const o=current();if(!o||o.locked)return;checkpoint();const copy={...o,id:uid(),x:o.x+grid*2,y:o.y+grid*2};state.objects.push(copy);selected=copy.id;refresh()}
 function remove(){cancelGesture();if(!current()||current().locked)return;checkpoint();state.objects=state.objects.filter(o=>o.id!==selected);selected=null;refresh()}
 $('#duplicate').onclick=duplicate;$('#delete').onclick=remove;
-async function restore(project){state={...project,assets:project.assets.map(a=>({...a})),objects:project.objects.map(o=>({...o})),spawn:{...project.spawn}};selected=null;regionIds=null;brush=null;await cacheAssets(state.assets);setTool(state.objects.length?'select':'block');refresh();renderPalette();showAssets(!$('#assets').hidden&&state.assets.length>0)}
-async function undo(redo=false){if(playing||importing)return;if(shared?.connected){if(redo)return;try{await shared.queue;await shared.tool('undo_level',{revision:shared.revision})}catch(e){message(e.message)}return}const from=redo?future:history,to=redo?history:future;if(!from.length)return;const before=snapshot(state),target=from.at(-1);importing=true;localRevision++;try{await cacheAssets(target.assets);await restore(target);from.pop();to.push(before);autosave?.changed()}catch(error){message(error.message,6000)}finally{importing=false;refresh()}}
+async function restore(project,{preserveTool=false}={}){const previousTool=tool;state={...project,assets:project.assets.map(a=>({...a})),objects:project.objects.map(o=>({...o})),spawn:{...project.spawn}};selected=null;regionIds=null;brush=null;await cacheAssets(state.assets);setTool(preserveTool&&['paint','mask','block','collision'].includes(previousTool)?previousTool:state.objects.length?'select':'paint');refresh();renderPalette();showAssets(!$('#assets').hidden&&state.assets.length>0)}
+async function undo(redo=false){if(playing||importing)return;cancelGesture();if(shared?.connected){if(redo)return;try{await shared.queue;await shared.tool('undo_level',{revision:shared.revision})}catch(e){message(e.message)}return}const from=redo?future:history,to=redo?history:future;if(!from.length)return;const before=snapshot(state),target=from.at(-1);importing=true;localRevision++;try{await cacheAssets(target.assets);await restore(target,{preserveTool:true});from.pop();to.push(before);autosave?.changed()}catch(error){message(error.message,6000)}finally{importing=false;refresh()}}
 $('#undo').onclick=()=>undo();
 $('#project-name').onchange=e=>{const name=projectName(e.target.value);if(!name){message('Give the project a name before saving.');return}if(name!==state.name){checkpoint();state.name=name}refresh()};$('#grid').onchange=e=>{grid=Number(e.target.value);saveViewPrefs()};$('#pixel-view').onchange=e=>{pixelView=e.target.checked;saveViewPrefs()};
 function fit(){if(input?.active())input.cancel();camera.rotation=0;const b=bounds(state.objects,state.spawn),pad=width<680?80:65;camera.z=clamp(Math.min((width-2*pad)/Math.max(80,b.w),(height-2*pad)/Math.max(80,b.h)),.25,5);camera.x=b.x+b.w/2-width/(2*camera.z);camera.y=b.y+b.h/2-height/(2*camera.z);refresh()}
@@ -131,6 +139,23 @@ function addLadder(){if(playing||importing)return;setTool('select');checkpoint()
 $('#add-ladder').onclick=addLadder;
 function addBlock(x,y,w,h){checkpoint();const o={id:uid(),asset:null,name:sketchRole[0].toUpperCase()+sketchRole.slice(1),role:sketchRole,x:snap(x,grid),y:snap(y,grid),w:Math.max(grid,snap(w,grid)),h:Math.max(grid,snap(h,grid)),kind:sketchRole==='platform'?'solid':'decor',inset:0,flip:false,rotation:0,locked:false,opacity:1,crop:null,color:blockColor()};if(sketchRole==='background')state.objects.unshift(o);else state.objects.push(o);regionIds=null;selected=o.id;refresh();return o}
 function addCollision(points){if(!points.length)return;const r=collisionWidth/2,x=Math.max(-100000,Math.min(...points.map(p=>p.x))-r),y=Math.max(-100000,Math.min(...points.map(p=>p.y))-r),w=Math.min(8192,Math.max(...points.map(p=>p.x))+r-x),h=Math.min(8192,Math.max(...points.map(p=>p.y))+r-y);if(w<=0||h<=0){message('Collision stroke is outside the level.');return}checkpoint();const o={id:uid(),asset:null,name:'Invisible collision',x,y,w,h,kind:'solid',inset:0,rotation:0,flip:false,locked:false,opacity:1,crop:null,collisionOnly:true,brushWidth:collisionWidth,points:points.map(p=>({x:clamp(p.x-x,0,w),y:clamp(p.y-y,0,h)}))};state.objects.push(o);selected=o.id;refresh()}
+function beginPaint(world,options){paintEdit={changed:false,object:null,target:tool==='mask'&&current()?.asset?current().id:null,pressure:options.pressure,erase:options.erase};return true}
+function paintStroke(from,to,options){
+ if(!paintEdit)return;
+ const points=[{...from,pressure:options.fromPressure??options.pressure},{...to,pressure:options.pressure}],size=options.erase?maskWidth:paintWidth;
+ paintEdit.pressure=options.pressure;paintEdit.erase=options.erase;
+ if(options.erase){
+  const radius=size/2,left=Math.min(from.x,to.x)-radius,right=Math.max(from.x,to.x)+radius,top=Math.min(from.y,to.y)-radius,bottom=Math.max(from.y,to.y)+radius;
+  for(const object of state.objects){if(object.locked||object.collisionOnly||paintEdit.target&&object.id!==paintEdit.target||!paintEdit.target&&!eraseAll&&semanticRole(object)!==sketchRole)continue;const b=objectBounds(object);if(b.x>right||b.y>bottom||b.x+b.w<left||b.y+b.h<top)continue;if(eraseStroke(object,points,{size,pressure:penPressure,asset:state.assets.find(a=>a.id===object.asset)}))paintEdit.changed=true;}
+ }else{
+  const stroke=strokeMask(points,{size,pressure:penPressure});if(!stroke)return;
+  if(paintEdit.object)appendStroke(paintEdit.object,stroke);
+  else{const object={id:uid(),asset:null,name:sketchRole==='platform'?'Walkable mask':sketchRole==='background'?'Background mask':'Decoration mask',role:sketchRole,...stroke,kind:sketchRole==='platform'?'solid':'decor',inset:0,flip:false,rotation:0,locked:false,opacity:1,crop:null,color:blockColor()};paintEdit.object=object;if(sketchRole==='background')state.objects.unshift(object);else state.objects.push(object);}
+  paintEdit.changed=true;
+ }
+}
+function finishPaint(before){if(!paintEdit)return;if(paintEdit.changed){state.objects=state.objects.filter(o=>!o.mask||o.mask.runs.length);selected=null;regionIds=null;checkpoint(before);}paintEdit=null;refresh()}
+function cancelPaint(){paintEdit=null}
 function beginMask(o){if(o.artwork){message('Restore the sketch before editing its source pixels.');return false}const a=state.assets.find(a=>a.id===o.asset),img=images.get(a?.id);if(!a||!img)return false;if(a.spriteSheet){message('Open the sheet in Assets to edit its frames.');return false;}const c=document.createElement('canvas');c.width=a.w;c.height=a.h;c.getContext('2d').drawImage(img,0,0);maskEdit={object:o,asset:a,originalImage:img,canvas:c,copyId:uid(),changed:false};return true}
 function paintMask(a,b){const m=maskEdit;if(!m)return;const o=m.object,crop=o.crop||{x:0,y:0,w:1,h:1},map=p=>{const q=worldToLocal(p,o);return{x:(crop.x+(o.flip?1-q.x/o.w:q.x/o.w)*crop.w)*m.asset.w,y:(crop.y+q.y/o.h*crop.h)*m.asset.h}},p=map(a),q=map(b),c=m.canvas.getContext('2d');c.save();c.globalCompositeOperation='destination-out';c.strokeStyle='#000';c.fillStyle='#000';c.lineWidth=maskWidth*m.asset.w/o.w;c.lineCap='round';c.lineJoin='round';c.beginPath();c.moveTo(p.x,p.y);c.lineTo(q.x,q.y);c.stroke();c.beginPath();c.arc(q.x,q.y,c.lineWidth/2,0,2*Math.PI);c.fill();c.restore();m.changed=true;images.set(m.copyId,m.canvas);m.object.asset=m.copyId}
 function cancelMask(){const m=maskEdit;if(!m)return;m.object.asset=m.asset.id;images.delete(m.copyId);maskEdit=null}
@@ -152,7 +177,7 @@ input=installGestures(canvas,{
  preview:g=>gesture=g,hover:p=>hover=p,select:id=>{selected=id;regionIds=null},selectRegion:rect=>{regionIds=state.objects.filter(o=>!o.collisionOnly&&!o.locked).filter(o=>{const b=objectBounds(o);return b.x>=rect.x&&b.y>=rect.y&&b.x+b.w<=rect.x+rect.w&&b.y+b.h<=rect.y+rect.h}).map(o=>o.id);setTool('select');message(regionIds.length+' shapes selected');refresh()},
  closePanels:()=>{for(const p of ['#project','#help','#dimensions','#context-menu','#block-color'])$(p).hidden=true},
  refresh,viewChanged:()=>$('#coordinates').textContent=`${Math.round(camera.z*100)}%`,
- context:openContext,crop:cropSelected,commit:checkpoint,addBlock,addCollision,beginMask,paintMask,cancelMask,finishMask,noMask:()=>message('Select an imported image to erase.'),place:(x,y)=>place(brush,x,y)
+ context:openContext,crop:cropSelected,commit:checkpoint,addBlock,addCollision,beginPaint,paintStroke,finishPaint,cancelPaint,beginMask,paintMask,cancelMask,finishMask,noMask:()=>message('Select an imported image to erase.'),place:(x,y)=>place(brush,x,y)
 },pointers);
 function resetInput(){keys.clear();playControls?.reset();touches.clear();$$('[data-control]').forEach(b=>b.setAttribute('aria-pressed','false'));accumulator=0;lastTime=0}
 function restart(){resetInput();player=newPlayer(state.spawn);camera.x=player.x-width/(2*camera.z);camera.y=player.y-height*.6/camera.z}
@@ -161,7 +186,31 @@ $('#play').onclick=togglePlay;$('#exit-play').onclick=()=>{if(playing)togglePlay
 playControls=installPlayInput(canvas,{playing:()=>playing,exit:()=>{if(playing)togglePlay()}});
 function interrupt(){assetTray?.cancel();numberScrub?.cancel();cancelGesture();resetInput();void autosave?.flush()}
 window.addEventListener('blur',interrupt);window.addEventListener('pagehide',interrupt);document.addEventListener('visibilitychange',interrupt);
-window.addEventListener('keydown',e=>{if(e.target.closest('input,select,textarea')||$('#import-dialog').open||$('#agent-dialog').open||$('#figma-dialog').open||e.target.closest('button')&&['Enter','Space'].includes(e.code))return;const code=e.code;if(workspaces?.tab()==='assets'){if((e.metaKey||e.ctrlKey)&&['KeyZ','KeyS'].includes(code)){e.preventDefault();if(!e.repeat){if(code==='KeyZ')void undo(e.shiftKey);else saveProject(state)}}return}if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Enter','Delete','Backspace'].includes(code)||e.metaKey||e.ctrlKey)e.preventDefault();if(e.repeat){keys.add(code);return}keys.add(code);if(code==='Escape'){if(playing)togglePlay();else{setTool('select');for(const p of ['#project','#help','#dimensions'])$(p).hidden=true}return}if(code==='Enter'){togglePlay();return}if(playing){if(['KeyK','KeyX'].includes(code))playControls.dodge=player.face;return}if((e.metaKey||e.ctrlKey)&&code==='KeyS')saveProject(state);else if((e.metaKey||e.ctrlKey)&&code==='KeyZ')void undo(e.shiftKey);else if((e.metaKey||e.ctrlKey)&&code==='KeyD')duplicate();else if(code==='Delete'||code==='Backspace')remove();else if(code==='KeyV')setTool('select');else if(code==='KeyH')setTool('pan');else if(code==='KeyB')setTool('block');else if(code==='KeyL')addLadder();else if(code==='KeyC')setTool('collision');else if(code==='KeyE')setTool('mask');else if(code==='KeyM')setTool('spawn');else if(code==='KeyF')fit()});
+function shortcutContext(id){return workspaces?.tab()!=='assets'||['undo','redo','save','open','export','import','workspace','commands'].includes(id)}
+function performShortcut(id){
+ if(!shortcutContext(id))return;
+ const tools={paint:'paint',erase:'mask',block:'block',select:'select',pan:'pan',collision:'collision',spawn:'spawn'};
+ if(tools[id]){setTool(tools[id]);return}
+ if(['walkable','background','decoration'].includes(id)){$(`#semantic-colors [data-role="${id==='walkable'?'platform':id}"]`).click();return}
+ const actions={ladder:addLadder,smaller:()=>changeBrush(activeBrushSize()-1),larger:()=>changeBrush(activeBrushSize()+1),pressure:()=>{penPressure=!penPressure;updateBrush();saveViewPrefs()},eraseScope:()=>{eraseAll=!eraseAll;saveViewPrefs();setTool(tool)},undo:()=>undo(),redo:()=>undo(true),save:()=>$('#save').click(),open:()=>$('#load').click(),export:()=>$('#export').click(),import:()=>$('#import-button').click(),duplicate,delete:remove,fit,zoomIn:()=>zoomAt(camera,{x:width/2,y:height/2},camera.z*1.25),zoomOut:()=>zoomAt(camera,{x:width/2,y:height/2},camera.z/1.25),actualSize:()=>zoomAt(camera,{x:width/2,y:height/2},1),grid:()=>{const values=[1,4,8,16];$('#grid').value=values[(values.indexOf(grid)+1)%values.length];$('#grid').dispatchEvent(new Event('change'))},pixels:()=>$('#pixel-view').click(),workspace:()=>workspaces?.show(workspaces.tab()==='assets'?'level':'assets'),generate:()=>$('#prepare-artwork').click(),applyArtwork:()=>$('#apply-artwork').click(),commands:()=>showCommands(),play:togglePlay,escape:()=>{if(playing)togglePlay();else{setTool('select');for(const p of ['#project','#help','#dimensions'])$(p).hidden=true}}};
+ const result=actions[id]?.();if(result?.catch)result.catch(error=>message(error.message,6000));
+}
+const showCommands=installCommandPalette($('#commands-dialog'),{perform:performShortcut,context:shortcutContext});
+$('#commands-button').onclick=showCommands;$('#shortcuts-button').onclick=showCommands;
+for(const [id,,key] of shortcuts){const selectors={paint:'[data-tool="paint"]',erase:'[data-tool="mask"]',block:'[data-tool="block"]',select:'[data-tool="select"]',pan:'[data-tool="pan"]',collision:'[data-tool="collision"]',spawn:'[data-tool="spawn"]',generate:'#prepare-artwork',applyArtwork:'#apply-artwork',save:'#save',open:'#load',export:'#export',undo:'#undo',fit:'#fit'};const button=selectors[id]&&$(selectors[id]);if(button){button.title=button.getAttribute('aria-label')||String(button.textContent||id).trim();button.title+=' ('+key+')';button.setAttribute('aria-keyshortcuts',key.replace('Ctrl','Control'));}}
+window.addEventListener('keydown',e=>{
+ if(e.isComposing)return;
+ if((e.ctrlKey||e.metaKey)&&e.code==='KeyK'){e.preventDefault();if(!e.repeat&&!$('#commands-dialog').open)showCommands();return}
+ if((e.ctrlKey||e.metaKey)&&e.code==='KeyS'&&!document.querySelector('dialog[open]')){e.preventDefault();if(!e.repeat){e.target.blur?.();performShortcut(e.shiftKey?'export':'save')}return}
+ if(e.target.closest('input:not([type="range"]):not([type="checkbox"]),select,textarea,[contenteditable="true"]')||document.querySelector('dialog[open]')||e.target.closest('button')&&['Enter','Space'].includes(e.code))return;
+ if(e.target.matches?.('input[type="range"]')&&['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Home','End','PageUp','PageDown'].includes(e.code)||e.target.matches?.('input[type="checkbox"]')&&e.code==='Space')return;
+ const code=e.code;keys.add(code);
+ if(code==='Tab'&&e.target!==canvas)return;
+ if(playing){if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','Space','Enter','Escape'].includes(code))e.preventDefault();if(!e.repeat&&['Escape','Enter'].includes(code))togglePlay();else if(!e.repeat&&['KeyK','KeyX'].includes(code))playControls.dodge=player.face;return}
+ if(code==='Space'||code==='AltLeft'||code==='AltRight'){e.preventDefault();return}
+ const action=resolveShortcut(e);if(action&&shortcutContext(action)){e.preventDefault();performShortcut(action);return}
+ if(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(code)&&!e.ctrlKey&&!e.metaKey&&!e.altKey){e.preventDefault();const amount=e.shiftKey?grid*10:grid,dx=code==='ArrowLeft'?-amount:code==='ArrowRight'?amount:0,dy=code==='ArrowUp'?-amount:code==='ArrowDown'?amount:0,o=current();if(o&&!o.locked){const before=snapshot(state);o.x+=dx;o.y+=dy;checkpoint(before);refresh()}else{camera.x+=dx;camera.y+=dy}}
+});
 window.addEventListener('keyup',e=>keys.delete(e.code));
 function drawCollision(points,width){if(!points?.length)return;paint.save();paint.strokeStyle='#ff6538';paint.fillStyle='#ff6538';paint.globalAlpha=.68;paint.lineCap='round';paint.lineJoin='round';paint.lineWidth=width;paint.beginPath();paint.moveTo(points[0].x,points[0].y);for(const p of points.slice(1))paint.lineTo(p.x,p.y);paint.stroke();if(points.length===1){paint.beginPath();paint.arc(points[0].x,points[0].y,width/2,0,Math.PI*2);paint.fill()}paint.restore()}
 function drawPiece(o,alpha=1){if(o.collisionOnly){if(!playing)drawCollision(o.points.map(p=>({x:o.x+p.x,y:o.y+p.y})),o.brushWidth);return}drawObject(paint,o,images.get(o.artwork?.asset||o.asset),{alpha,fill:playing?'#ddd':'#242424',stroke:'#888',lineWidth:1/camera.z})}
@@ -180,6 +229,7 @@ function render(now){requestAnimationFrame(render);const elapsed=lastTime?Math.m
   if(gesture?.type==='region'){const a=gesture.start,b=gesture.end;ctx.save();ctx.fillStyle='#99e2b420';ctx.strokeStyle='#99e2b4';ctx.lineWidth=1/camera.z;ctx.fillRect(a.x,a.y,b.x-a.x,b.y-a.y);ctx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y);ctx.restore()}
   if(gesture?.type==='block'){const a=gesture.start,b=gesture.end;ctx.save();ctx.globalAlpha=.65;ctx.fillStyle=blockColor();ctx.fillRect(a.x,a.y,b.x-a.x,b.y-a.y);ctx.restore();ctx.strokeStyle='#fff';ctx.lineWidth=1/camera.z;ctx.strokeRect(a.x,a.y,b.x-a.x,b.y-a.y)}
   if(gesture?.type==='collision')drawCollision(gesture.points,collisionWidth);
+  if(hover&&['paint','mask','collision'].includes(tool)){const erasing=paintEdit?.erase||tool==='mask'||keys.has('AltLeft')||keys.has('AltRight'),size=erasing?maskWidth:activeBrushSize(),radius=Math.max(.5,size/2*(penPressure&&paintEdit?Math.max(.08,paintEdit.pressure):1));ctx.save();ctx.lineWidth=3/camera.z;ctx.strokeStyle='#000';ctx.beginPath();ctx.arc(hover.x,hover.y,radius,0,Math.PI*2);ctx.stroke();ctx.lineWidth=1/camera.z;ctx.strokeStyle=erasing?'#ffcfb9':'#fff';ctx.stroke();ctx.restore()}
   ctx.strokeStyle='#aaa';ctx.lineWidth=1/camera.z;ctx.beginPath();ctx.moveTo(state.spawn.x-7,state.spawn.y+2);ctx.lineTo(state.spawn.x+7,state.spawn.y+2);ctx.stroke();
  }ctx.restore();
 }
@@ -255,9 +305,15 @@ async function handoffArtwork(args){
  const result=await workspaceTool('prepare_artwork',{...args,includeImages:false}),id=result.request?.id||result.requestId;
  const request=await getArtworkRequest(snapshot(state),{requestId:id,includeImages:true});
  exportArtworkRequest(snapshot(state),request);
- message(shared.connected?'Sketch and sheets ready. Ask ChatGPT to use request '+id+'.':'Sketch and sheets downloaded. Attach the ZIP in ChatGPT; return its PNG here.',7000);
+ $('#handoff-note').textContent=shared?.connected?'Paste these instructions in ChatGPT with your Pixel Mill connection. Your masks and active asset references are ready.':'Attach the downloaded ZIP in ChatGPT, then paste these instructions. The ZIP contains your masks and active asset references.';
+ $('#handoff-prompt').value=request.instructions+`\n\nUse image generation to make the level artwork. ${shared?.connected?'Read get_artwork_request with requestId "'+id+'" and includeImages:true to obtain the mask and reference images.':'Use the mask, manifest and reference PNGs in the attached ZIP.'} Return one PNG named ${id}.png. ${shared?.connected?'Apply it with apply_artwork, requestId and the complete PNG dataUrl.':'I will import the returned PNG in Pixel Mill.'}`;
+ $('#handoff-dialog').showModal();
+ message('Masks and references ready for image generation.',5000);
  return request;
 }
+$('#close-handoff').onclick=()=>$('#handoff-dialog').close();
+$('#copy-artwork-prompt').onclick=async()=>{try{await navigator.clipboard.writeText($('#handoff-prompt').value);message('Image generation instructions copied.')}catch{$('#handoff-prompt').focus();$('#handoff-prompt').select();message('Select and copy the instructions.')}};
+$('#import-artwork-return').onclick=()=>{$('#handoff-dialog').close();$('#apply-artwork').click()};
 async function filePNG(file){
  if(file.size>24*1024*1024)throw Error('Choose a PNG under 24 MB.');
  const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let offset=0;offset<bytes.length;offset+=32768)binary+=String.fromCharCode(...bytes.subarray(offset,offset+32768));
@@ -289,7 +345,7 @@ async function acceptArtworkFile(file,selectedRequestId){
 }
 workspaces=installWorkspaces({getState:()=>state,getObjectIds:requestedObjects,getRequest:latestArtworkRequest,getRole:()=>sketchRole,getColor:blockColor,
  runTool:workspaceTool,mutate:mutateWorkspace,undo:()=>undo(),message,onAssetsRefresh:()=>spriteWorkspace?.refresh(),onGroupSheet:()=>spriteWorkspace?.openProposal(),
- setRole:(role,color)=>{sketchRole=role;setSketchColor(color);regionIds=null;setTool('block')},
+ setRole:(role,color)=>{sketchRole=role;setSketchColor(color);regionIds=null;setTool(tool==='mask'?'mask':'paint')},
  setWorkspace:tab=>{cancelGesture();showAssets(false);if(tab==='assets'&&playing)togglePlay()},
  restoreArtwork:({objectIds})=>mutateWorkspace(s=>{for(const o of s.objects)if(!o.locked&&(!objectIds||objectIds.includes(o.id)))delete o.artwork}),
  prepareArtwork:handoffArtwork,applyArtwork:acceptArtworkFile,applySelectedSheets:args=>workspaceTool('apply_asset_sheet',args)
@@ -297,7 +353,7 @@ workspaces=installWorkspaces({getState:()=>state,getObjectIds:requestedObjects,g
 spriteWorkspace=installSpriteWorkspace({getState:()=>state,getAssetId:()=>workspaces.getAssetId(),runTool:workspaceTool,mutate:mutateWorkspace,prepareAssetArtwork:handoffAssetArtwork,applyAssetArtwork:acceptAssetArtworkFile,message});
 $('#treatment-scope').onclick=()=>{regionIds=null;selected=null;refresh()};
 $('#select-region').onclick=()=>{regionIds=null;setTool('region')};
-setTool('block');
+setTool('paint');
 if(document.modelContext?.registerTool){const lifecycle=new AbortController();for(const tool of agentTools){try{Promise.resolve(document.modelContext.registerTool({...tool,execute:args=>executeAgent(tool.name,args)},{signal:lifecycle.signal})).catch(()=>{})}catch{}}window.addEventListener('pagehide',()=>lifecycle.abort(),{once:true})}
 if(typeof location!=='undefined'){
  const room=location.hash.match(/^#room=([a-f0-9]{64})$/)?.[1],project=location.hash.match(/^#project=([a-f0-9]{64})$/)?.[1];
