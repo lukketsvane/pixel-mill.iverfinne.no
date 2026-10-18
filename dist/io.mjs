@@ -1,5 +1,6 @@
 import {requireProjectName} from './project-state.mjs';
-import {detectBackground,extractPart,processPixels,safeName,zipStore} from './pixel-core.mjs';
+import {extractPart,processPixels,safeName,zipStore} from './pixel-core.mjs';
+import {removeAssetBackground} from './asset-edit.mjs';
 import {drawObject} from './geometry.mjs';
 import {exportSpriteSheet,autoGroupSpriteSheet} from './spritesheets.mjs';
 import {pngHeader,dataURL} from './png.mjs';
@@ -24,7 +25,9 @@ export async function importImages(files,options,onProgress=()=>{}){
   }
   const c=imageCanvas(w,h),ctx=c.getContext('2d',{willReadFrequently:true});ctx.drawImage(img,0,0);const data=ctx.getImageData(0,0,w,h).data;c.width=c.height=1;
   const tw=Math.max(1,Math.round(w*options.scale)),th=Math.max(1,Math.round(h*options.scale));if(tw*th>4000000)throw Error('Choose a smaller import scale.');
-  const result=await process({data,width:w,height:h,options:{width:tw,height:th,color:detectBackground(data,w,h),tolerance:options.tolerance,mode:'all',remove:options.remove,palette:0,minArea:options.minArea,connectivity:8,bridge:0}});
+  let transparentBorder=false;for(let x=0;x<w&&!transparentBorder;x++)transparentBorder=data[x*4+3]<255||data[((h-1)*w+x)*4+3]<255;for(let y=0;y<h&&!transparentBorder;y++)transparentBorder=data[(y*w)*4+3]<255||data[(y*w+w-1)*4+3]<255;
+  const pixels=options.remove&&!transparentBorder?removeAssetBackground({w,h,pixels:data}).pixels:data;
+  const result=await process({data:pixels,width:w,height:h,options:{width:tw,height:th,color:[0,0,0],tolerance:options.tolerance,mode:'all',remove:false,palette:0,minArea:options.minArea,connectivity:8,bridge:0}});
   let parts=result.parts;if(!options.split&&parts.length){const x=Math.min(...parts.map(p=>p.x)),y=Math.min(...parts.map(p=>p.y));parts=[{x,y,w:Math.max(...parts.map(p=>p.x+p.w))-x,h:Math.max(...parts.map(p=>p.y+p.h))-y,labels:parts.flatMap(p=>p.labels)}]}
   if(assets.length+parts.length>2000)throw Error('Too many parts. Raise the minimum pixels.');
   for(let i=0;i<parts.length;i++){const p=extractPart(result,parts[i],0),canvas=imageCanvas(p.width,p.height);canvas.getContext('2d').putImageData(new ImageData(p.data,p.width,p.height),0,0);assets.push({id:uid(),name:`${safeName(file.name.replace(/\.[^.]+$/,''))}-${String(i+1).padStart(3,'0')}`,w:p.width,h:p.height,src:canvas.toDataURL('image/png')});canvas.width=canvas.height=1}

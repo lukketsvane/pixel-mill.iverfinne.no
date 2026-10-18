@@ -24,7 +24,7 @@ Every application is one undo step. **Restore sketch** removes the treatment whi
 
 ## Character sheets and animation groups
 
-**+**, **Import assets** and **Ctrl/Cmd+I** open the image picker directly. Import always extracts loose pieces at native 1× scale, keeps the background, uses tolerance 18 and discards components smaller than 17 pixels. Drop and paste use the same defaults. There is no import settings dialog. Original source images remain available.
+**+**, **Import assets** and **Ctrl/Cmd+I** open the image picker directly. Import automatically removes an edge-connected flat background and extracts every connected visible object as its own sprite at native 1× scale, including one-pixel objects. Already transparent images retain their visible pixels and alpha. Drop and paste use the same behavior. There is no import settings dialog or automatic grouping into a parent sheet.
 
 Click an asset on the fixed strip to select it, choose it for placement and open its docked inspector. Shift-click selects a range; Ctrl/Cmd-click toggles assets independently of generation references. Ctrl/Cmd+A selects the strip, Delete/Backspace removes unused selected assets in one undo step, and used sources are retained. Escape clears selection. The separate Assets view and Level/Assets tabs are removed.
 

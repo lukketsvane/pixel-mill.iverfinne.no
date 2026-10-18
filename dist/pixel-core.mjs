@@ -4,7 +4,7 @@ export function detectBackground(data,w,h){
  const b=[...bins.values()].sort((a,b)=>b[0]-a[0])[0];return b?b.slice(1).map(v=>Math.round(v/b[0])):[0,0,0];
 }
 export function removeBackground(data,w,h,color,tolerance,mode='all',enabled=true){
- const out=new Uint8ClampedArray(data);const n=w*h,match=new Uint8Array(n);const tolerance2=tolerance*tolerance;
+ const out=new Uint8ClampedArray(data);if(!enabled)return out;const n=w*h,match=new Uint8Array(n);const tolerance2=tolerance*tolerance;
  for(let p=0;p<n;p++){let i=p*4;const dr=data[i]-color[0],dg=data[i+1]-color[1],db=data[i+2]-color[2];match[p]=data[i+3]<128||enabled&&(dr*dr+dg*dg+db*db)/3<=tolerance2?1:0;}
  if(mode==='edge'&&enabled){const queue=new Int32Array(n),seen=new Uint8Array(n);let head=0,tail=0;const add=p=>{if(match[p]&&!seen[p]){seen[p]=1;queue[tail++]=p}};for(let x=0;x<w;x++){add(x);add((h-1)*w+x)}for(let y=0;y<h;y++){add(y*w);add(y*w+w-1)}while(head<tail){const p=queue[head++],x=p%w,y=(p/w)|0;if(x)add(p-1);if(x<w-1)add(p+1);if(y)add(p-w);if(y<h-1)add(p+w)}for(let p=0;p<n;p++){out[p*4+3]=seen[p]||data[p*4+3]<128?0:255}}
  else for(let p=0;p<n;p++)out[p*4+3]=match[p]?0:255;

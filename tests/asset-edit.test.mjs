@@ -5,6 +5,7 @@ import {imageProject,projectDiff,applyDiff,patchSourceHash} from '../dist/agent.
 import {validateProject} from '../dist/engine.mjs';
 import {encodePNG,decodePNG,dataURL,pngBytes} from '../dist/png.mjs';
 import {groupSpriteSheet} from '../dist/spritesheets.mjs';
+import {processPixels,extractPart} from '../dist/pixel-core.mjs';
 
 const image=(w,h,color=[0,0,0,0])=>{const pixels=new Uint8Array(w*h*4);for(let at=0;at<pixels.length;at+=4)pixels.set(color,at);return{w,h,pixels}};
 const pixel=(value,x,y)=>[...value.pixels.subarray((y*value.w+x)*4,(y*value.w+x+1)*4)];
@@ -12,6 +13,11 @@ const rectangle=(value,x,y,w,h,color)=>{for(let row=y;row<y+h;row++)for(let col=
 async function project(value){const src=dataURL(await encodePNG(value));return validateProject({format:'max-level-studio',version:1,name:'Asset edit',spawn:{x:3,y:9},assets:[{id:'source',name:'Source',w:value.w,h:value.h,src,selectedForGeneration:true,sheet:{tileSize:16}}],objects:[{id:'placed',asset:'source',name:'Placed',x:10,y:20,w:value.w,h:value.h,kind:'decor',rotation:0}]})}
 function whiteFixture(){const value=image(12,10,[255,255,255,255]);rectangle(value,4,3,4,4,[20,30,40,255]);rectangle(value,5,4,2,1,[255,255,255,255]);rectangle(value,4,4,1,1,[25,50,75,91]);rectangle(value,1,1,1,1,[244,250,252,255]);return value}
 function partsFixture(){const value=image(28,12);rectangle(value,1,1,3,6,[80,90,100,91]);rectangle(value,3,6,1,1,[0,0,0,0]);rectangle(value,12,1,4,5,[150,60,10,255]);rectangle(value,25,1,2,8,[25,35,45,255]);return value}
+
+test('transparent imports retain semi-transparent RGBA and one-pixel sprites at native size',()=>{
+ const data=new Uint8Array([20,40,60,87,0,0,0,0,90,120,150,200]),result=processPixels({data,width:3,height:1,options:{width:3,height:1,remove:false,color:[20,40,60],tolerance:18,minArea:1,connectivity:8,palette:0}});
+ assert.deepEqual([...result.data],[...data]);assert.equal(result.parts.length,2);assert.deepEqual(result.parts.map(part=>[part.x,part.y,part.w,part.h]),[[0,0,1,1],[2,0,1,1]]);assert.deepEqual([...extractPart(result,result.parts[0]).data],[20,40,60,87]);assert.deepEqual([...extractPart(result,result.parts[1]).data],[90,120,150,200]);
+});
 
 test('background removal preserves interior matching colors, framing and exact foreground alpha',()=>{
  const source=whiteFixture(),before=new Uint8Array(source.pixels),result=removeAssetBackground(source);
