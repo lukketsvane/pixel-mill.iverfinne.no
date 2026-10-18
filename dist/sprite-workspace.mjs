@@ -10,7 +10,7 @@ const bytes=src=>Uint8Array.from(atob(src.split(',')[1]),c=>c.charCodeAt(0));
 // rectangles; it never turns animation frames into unrelated palette entries.
 export function installSpriteWorkspace(api){
  const host=api.host||document.querySelector('#sprite-workspace');
- if(!host)return{refresh(){},openProposal(){},getSelection(){return null}};
+ if(!host)return{refresh(){},getSelection(){return null}};
  let assetId=null,signature=null,source=null,epoch=0,busy=false,proposalOpen=false;
  let selectedFrames=new Set(),selectedGroups=new Set(),lastFrame=null,editor,form,groupList,selectionBar,summary,scopeLabel;
  let expandedGroup=null,playingGroup=null,animationRequest=0,playStarted=0;
@@ -135,7 +135,7 @@ export function installSpriteWorkspace(api){
   epoch++;globalThis.cancelAnimationFrame?.(animationRequest);host.replaceChildren();form=null;groupList=null;selectionBar=null;scopeLabel=null;if(!asset){host.style.removeProperty('--sprite-source');stopAnimation();return}
   editor=el('div','sprite-editor');host.append(editor);
   const sheet=asset.spriteSheet;
-  if(!sheet){editor.append(el('p','sprite-note','Original image · no slicing applied'),button('Recognize sheet','Recognize sheet structure',async()=>{const ok=await mutate('group_sprite_sheet',{});if(ok&&!getAsset()?.spriteSheet)tell('Kept as one image. No repeated layout or separate assets found.')}));return}if(proposalOpen){renderOrganization(asset);return}
+  if(!sheet)return;if(proposalOpen){renderOrganization(asset);return}
   summary=el('div','sprite-sheet-summary');const type=sheet.type==='character'?'Character sheet':'Environment sheet';summary.append(el('strong','',type),el('span','',`${sheet.groups.length} ${sheet.type==='character'?'animations':'sets'} · ${sheet.frames.length} ${sheet.type==='character'?'frames':'assets'}`));editor.append(summary);
   const scope=el('div','sprite-scope');scope.append(button('‹ Sheet','Select the whole sprite sheet',clearSelection));scopeLabel=el('output','','Whole sheet');scope.append(scopeLabel);editor.append(scope);
   const context=el('div','sprite-context-actions');
@@ -158,5 +158,5 @@ export function installSpriteWorkspace(api){
   render(asset);
  }
  refresh();
- return{refresh,getSelection,clearSelection,openProposal(){proposalOpen=true;const asset=getAsset();if(asset)render(asset)}};
+ return{refresh,getSelection,clearSelection};
 }

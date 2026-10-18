@@ -16,7 +16,7 @@ export default async function handler(request,response){
   const url=new URL(request.url,`https://${host}`),rawBody=request.body;
   const body=['GET','HEAD'].includes(request.method)?undefined:rawBody===undefined?request:typeof rawBody==='string'||Buffer.isBuffer(rawBody)?rawBody:JSON.stringify(rawBody);
   const webRequest=new Request(url,{method:request.method,headers:request.headers,signal:abort.signal,...(body===undefined?{}:{body,duplex:'half'})});
-  const result=await transferFetch(webRequest,bucket,request=>agentFetch(request,{BUCKET:bucket,OPENAI_API_KEY:process.env.OPENAI_API_KEY,OPENAI_MODEL:process.env.OPENAI_MODEL,CHAT_DAILY_LIMIT:process.env.CHAT_DAILY_LIMIT}));
+  const result=await transferFetch(webRequest,bucket,request=>agentFetch(request,{BUCKET:bucket,OPENAI_API_KEY:process.env.OPENAI_API_KEY,OPENAI_MODEL:process.env.OPENAI_MODEL,CHAT_DAILY_LIMIT:process.env.CHAT_DAILY_LIMIT}),{streamResponses:true});
   response.writeHead(result.status,Object.fromEntries(result.headers));
   if(result.headers.get('content-type')?.startsWith('text/event-stream'))response.flushHeaders();
   if(result.body){

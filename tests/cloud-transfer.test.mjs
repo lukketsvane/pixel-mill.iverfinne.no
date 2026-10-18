@@ -63,3 +63,20 @@ test('standard MCP responses retain their format and cross-origin transfer write
  const denied=await transferFetch(new Request('https://pixel.example/api/transfers/'+createProjectToken()+'/0',{method:'PUT',headers:{Origin:'https://other.example'},body:JSON.stringify({data:btoa('test')})}),bucket,()=>Response.json({}));
  assert.equal(denied.status,403);assert.equal(bucket.records.size,0);
 });
+
+test('streaming hosts return exact large JSON responses without temporary storage writes',async()=>{
+ const text=JSON.stringify({name:'Garden 🌿',pixels:'x'.repeat(7*1024*1024)}),bytes=new TextEncoder().encode(text);let writes=0;
+ const bucket={put(){writes++;throw Error('Temporary storage is unavailable.')}},source=new Response(new ReadableStream({start(controller){controller.enqueue(bytes.subarray(0,1024));controller.enqueue(bytes.subarray(1024));controller.close()}}),{status:200,headers:{'Content-Type':'application/json','Cache-Control':'no-store','X-Project-Revision':'29'}});
+ const result=await transferFetch(new Request('https://pixel.example/api/rooms/example',{headers:{Accept:transferContentType+', application/json'}}),bucket,()=>source,{streamResponses:true});
+ assert.equal(result,source);assert.equal(result.bodyUsed,false);assert.equal(writes,0);assert.equal(result.headers.get('X-Project-Revision'),'29');assert.equal(await result.text(),text);
+});
+
+test('streaming hosts still verify and reassemble chunked uploads before returning large JSON directly',async()=>{
+ const bucket=memoryBucket(),text=JSON.stringify({level:'🌿'.repeat(900000)}),packed=await packTransfer(text,createProjectToken());let commits=0,writes=0;
+ const originalPut=bucket.put;bucket.put=async(...args)=>{writes++;return originalPut(...args)};
+ for(let index=0;index<packed.parts.length;index++){
+  const response=await transferFetch(new Request('https://pixel.example/api/transfers/'+packed.descriptor.token+'/'+index,{method:'PUT',body:JSON.stringify({data:packed.parts[index]})}),bucket,()=>{throw Error('Upload part reached the project handler.')},{streamResponses:true});assert.equal(response.status,200);
+ }
+ const result=await transferFetch(new Request('https://pixel.example/api/projects',{method:'POST',headers:{'Content-Type':transferContentType,Accept:transferContentType+', application/json'},body:JSON.stringify(packed.descriptor)}),bucket,async request=>{commits++;assert.equal(request.headers.get('content-type'),'application/json');assert.equal(await request.text(),text);return new Response(text,{headers:{'Content-Type':'application/json'}})},{streamResponses:true});
+ assert.equal(result.status,200);assert.equal(await result.text(),text);assert.equal(commits,1);assert.equal(writes,packed.parts.length);assert.equal(bucket.records.size,0);
+});

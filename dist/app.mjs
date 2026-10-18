@@ -130,9 +130,8 @@ $('#import-figma').onclick=()=>exportBusy(()=>$('#figma-file').click());$('#open
 $('#figma-file').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file||importing)return;if(file.size>100*1024*1024){message('Choose a return JSON under 100 MB.');return}importing=true;try{const raw=JSON.parse(await file.text()),revision=localRevision,next=mergeFigmaReturn(snapshot(state),raw),guard=()=>revision===localRevision;await cacheAssets(next.assets,{guard});if(!guard())throw Error('The level changed during import. Import the return JSON again to merge against the latest version.');checkpoint();state=next;selected=null;regionIds=null;refresh();renderPalette();if(playing)colliders=platforms(state.objects);$('#figma-dialog').close();message('Figma changes merged',5000)}catch(error){message(error.message,8000)}finally{importing=false}};
 $('#scale-level').onclick=()=>{if(playing)return;cancelGesture();const factor=.75,before=snapshot(state);for(const o of state.objects){o.x*=factor;o.y*=factor;o.w=Math.max(1,o.w*factor);o.h=Math.max(1,o.h*factor);o.inset=Math.min(o.h-1,(o.inset||0)*factor);if(o.collisionOnly){o.points=o.points.map(p=>({x:p.x*factor,y:p.y*factor}));o.brushWidth=Math.max(1,o.brushWidth*factor)}}state.spawn.x*=factor;state.spawn.y*=factor;checkpoint(before);$('#project').hidden=true;fit();refresh();message('Level scaled to 75%')};
 $('#clear').onclick=()=>exportBusy(async()=>{await beginProject({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});showAssets(false);$('#project').hidden=true});
-$('#import-button').onclick=()=>{if(importing)return;$('#project').hidden=true;$('#import-dialog').showModal()};$('#import-options').onclick=()=>{$('#project').hidden=true;$('#import-dialog').showModal()};$('#close-import').onclick=()=>$('#import-dialog').close();
-$('#import-form').onsubmit=e=>{e.preventDefault();$('#files').click()};
-async function addFiles(files){if(importing||!files.length)return;importing=true;$('#import-dialog').close();$('#import-button').disabled=true;try{const options={sheet:$('#import-kind')?.value!=='pieces',recognize:$('#import-kind')?.value!=='image',remove:$('#background').value==='auto',scale:Number($('#scale').value),tolerance:clamp(Number($('#tolerance').value)||0,0,100),minArea:clamp(Number($('#min-area').value)||1,1,1000),split:$('#split').checked};const result=await importImages([...files],options,t=>message(t,0));if(state.assets.length+result.assets.length>2000)throw Error('The palette is full. Open a new level.');await cacheAssets(result.assets);if(result.assets.length){checkpoint();state.assets.push(...result.assets);renderPalette();if(options.sheet){workspaces?.focus?.(result.assets[0].id);workspaces?.show('assets')}else showAssets(true);refresh()}message(result.failed.length?result.failed.join(' · '):result.assets.length===1&&result.assets[0].spriteSheet?`${result.assets[0].spriteSheet.type==='character'?'Character':'Environment'} sheet · ${result.assets[0].spriteSheet.groups.length} ${result.assets[0].spriteSheet.type==='character'?'animations':'sets'} · ${result.assets[0].spriteSheet.frames.length} ${result.assets[0].spriteSheet.type==='character'?'frames':'assets'}`:`${result.assets.length} assets` ,result.failed.length?7000:2500)}catch(error){message(error.message)}finally{importing=false;$('#import-button').disabled=false}}
+$('#import-button').onclick=()=>{if(importing)return;$('#project').hidden=true;$('#files').click()};$('#import-options').onclick=()=>$('#import-button').click();
+async function addFiles(files){if(importing||!files.length)return;importing=true;$('#import-button').disabled=true;try{const result=await importImages([...files],{sheet:false,remove:false,scale:1,tolerance:18,minArea:17,split:true},t=>message(t,0));if(state.assets.length+result.assets.length>2000)throw Error('The palette is full. Open a new level.');await cacheAssets(result.assets);if(result.assets.length){checkpoint();state.assets.push(...result.assets);renderPalette();showAssets(true);refresh()}message(result.failed.length?result.failed.join(' · '):`${result.assets.length} assets`,result.failed.length?7000:2500)}catch(error){message(error.message)}finally{importing=false;$('#import-button').disabled=false}}
 $('#files').onchange=e=>{const files=[...e.target.files];e.target.value='';void addFiles(files)};
 document.addEventListener('dragover',e=>e.preventDefault());document.addEventListener('drop',e=>{e.preventDefault();void addFiles(e.dataTransfer.files)});document.addEventListener('paste',e=>{if(e.target.closest('input,textarea'))return;const files=[...e.clipboardData.items].filter(i=>i.type.startsWith('image/')).map(i=>i.getAsFile()).filter(Boolean);if(files.length){e.preventDefault();void addFiles(files)}});
 function place(assetId,x,y){const a=state.assets.find(a=>a.id===assetId);if(!a)throw Error('Choose an image from the palette.');checkpoint();const o={id:uid(),asset:a.id,name:a.name,x:snap(x,grid),y:snap(y,grid),w:a.w,h:a.h,kind:'platform',inset:0,flip:false,rotation:0,locked:false,opacity:1,crop:null};state.objects.push(o);setTool('select');selected=o.id;refresh();return o}
@@ -371,7 +370,7 @@ async function acceptArtworkFile(file,selectedRequestId){
  return workspaceTool('apply_artwork',{requestId:request.id,dataUrl:await filePNG(file),name:file.name.replace(/\.png$/i,'')});
 }
 workspaces=installWorkspaces({getState:()=>state,getObjectIds:requestedObjects,getRequest:latestArtworkRequest,getRole:()=>sketchRole,getColor:blockColor,
- runTool:workspaceTool,mutate:mutateWorkspace,undo:()=>undo(),message,onAssetsRefresh:()=>spriteWorkspace?.refresh(),onGroupSheet:()=>spriteWorkspace?.openProposal(),
+ runTool:workspaceTool,mutate:mutateWorkspace,undo:()=>undo(),message,onAssetsRefresh:()=>spriteWorkspace?.refresh(),
  setRole:(role,color)=>{sketchRole=role;setSketchColor(color);regionIds=null;setTool(tool==='mask'?'mask':'paint')},
  setWorkspace:tab=>{cancelGesture();showAssets(false);if(tab==='assets'&&playing)togglePlay()},
  restoreArtwork:({objectIds})=>mutateWorkspace(s=>{for(const o of s.objects)if(!o.locked&&(!objectIds||objectIds.includes(o.id)))delete o.artwork}),
@@ -391,17 +390,17 @@ if(typeof location!=='undefined'){
    app.inert=true;
    try{await autosave.init({token:project,roomToken:room});document.querySelector('#project-load-error')?.remove()}
    catch(error){
-    message(error.message,6000);
+    if(autosave.ready)message(error.message,6000);
     if(!autosave.ready){
      let panel=document.querySelector('#project-load-error');
      if(!panel){
-      panel=document.createElement('dialog');panel.id='project-load-error';panel.setAttribute('aria-labelledby','project-load-title');
+      panel=document.createElement('aside');panel.id='project-load-error';panel.setAttribute('role','status');panel.setAttribute('aria-live','polite');panel.setAttribute('aria-labelledby','project-load-title');
       const title=document.createElement('h2');title.id='project-load-title';title.textContent='Could not open this project';
-      const text=document.createElement('p');text.textContent='The cloud copy could not be loaded. Your project link is kept. Retry when storage is available, or start a separate local draft.';
-      const retry=document.createElement('button');retry.textContent='Retry';retry.onclick=async()=>{retry.disabled=true;try{await loadProject()}finally{retry.disabled=false}};
-      const draft=document.createElement('button');draft.textContent='Start a local draft';draft.onclick=async()=>{await autosave.start(snapshot(state));window.history.replaceState(null,'',location.pathname);panel.remove();app.inert=false;scheduleAgentLink()};
-      panel.append(title,text,retry,draft);panel.addEventListener('cancel',event=>event.preventDefault());document.body.append(panel);panel.showModal();
+      const retry=document.createElement('button');retry.textContent='Retry';retry.title='Retry opening this project';retry.onclick=async()=>{retry.disabled=draft.disabled=true;try{await loadProject()}finally{retry.disabled=draft.disabled=false}};
+      const draft=document.createElement('button');draft.textContent='Local draft';draft.title='Start a separate local draft';draft.setAttribute('aria-label','Start a separate local draft');draft.onclick=async()=>{retry.disabled=draft.disabled=true;try{await autosave.start(snapshot(state));window.history.replaceState(null,'',location.pathname);panel.remove();app.inert=false;scheduleAgentLink()}catch(error){panel.title=error.message}finally{retry.disabled=draft.disabled=false}};
+      panel.append(title,retry,draft);document.body.append(panel);
      }
+     panel.title=error.message;
     }
    }finally{app.inert=!autosave.ready;if(autosave.ready)scheduleAgentLink()}
   };

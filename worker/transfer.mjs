@@ -10,7 +10,7 @@ async function readTransferPart(bucket,key){
  if(!part||typeof part.data!=='string'||!Number.isFinite(part.createdAt)||Date.now()-part.createdAt>30*60000)throw Error('Transfer expired.');
  return part.data;
 }
-export async function transferFetch(request,bucket,next){
+export async function transferFetch(request,bucket,next,{streamResponses=false}={}){
  const url=new URL(request.url),match=url.pathname.match(/^\/api\/transfers\/([a-f0-9]{64})(?:\/(\d{1,2}))?$/);
  if(request.headers.get('origin')&&request.headers.get('origin')!==url.origin)return transferResponse({error:'Origin not allowed'},403);
  if(match){
@@ -41,7 +41,7 @@ export async function transferFetch(request,bucket,next){
   }catch{return transferFailure()}
  }
  const result=await next(request);
- if(!request.headers.get('accept')?.includes(transferContentType)||!bucket||!result.ok||!result.body||!result.headers.get('content-type')?.startsWith('application/json'))return result;
+ if(streamResponses||!request.headers.get('accept')?.includes(transferContentType)||!bucket||!result.ok||!result.body||!result.headers.get('content-type')?.startsWith('application/json'))return result;
  const text=await result.text();if(new TextEncoder().encode(text).length<=3*transferChunkBytes)return new Response(text,{status:result.status,headers:result.headers});
  try{
   const packed=await packTransfer(text,createProjectToken()),key=await transferKey(packed.descriptor.token);

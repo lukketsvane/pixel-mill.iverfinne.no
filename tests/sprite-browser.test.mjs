@@ -41,13 +41,25 @@ async function sheet(page,assetId){return(await tool(page,'inspect_sprite_sheet'
 function entries(buffer){const files=new Map();let p=0;while(buffer.readUInt32LE(p)===0x04034b50){const size=buffer.readUInt32LE(p+18),n=buffer.readUInt16LE(p+26),extra=buffer.readUInt16LE(p+28),name=buffer.subarray(p+30,p+30+n).toString(),start=p+30+n+extra;files.set(name,buffer.subarray(start,start+size));p=start+size}return files}
 async function waitGroups(page,n){await page.waitForFunction(n=>document.querySelectorAll('.sprite-group').length===n,n)}
 
+test('browser: import opens the file chooser directly and extracts native pieces with the approved defaults',{skip:!process.env.PIXEL_MILL_BROWSER,timeout:90000},async()=>{
+ const h=await harness(),{page}=h;
+ try{
+  await tool(page,'edit_level',{revision:(await tool(page,'get_level')).revision,operations:[{type:'rename',name:'Native import defaults'}]});
+  const w=64,frameHeight=48,pixels=new Uint8Array(w*frameHeight*4),parts=[{x:0,y:0,w:8,h:6,color:[245,245,245,255]},{x:25,y:12,w:5,h:5,color:[45,120,190,255]},{x:40,y:28,w:17,h:1,color:[220,130,70,255]},{x:44,y:4,w:4,h:4,color:[190,40,45,255]}];for(const part of parts)for(let y=0;y<part.h;y++)for(let x=0;x<part.w;x++)pixels.set(part.color,((part.y+y)*w+part.x+x)*4);
+  const chooser=page.waitForEvent('filechooser');await page.locator('#import-button').click();assert.equal(await page.locator('#import-dialog,#import-kind,#background,#tolerance,#scale,#split,#min-area').count(),0,'import settings are absent from the normal UI');assert.equal(await page.locator('dialog[open]').count(),0);await(await chooser).setFiles({name:'Native pieces.png',mimeType:'image/png',buffer:Buffer.from(await encodePNG({w,h:frameHeight,pixels}))});await page.waitForFunction(()=>!document.querySelector('#import-button').disabled);
+  let saved=await project(page);assert.equal(saved.assets.length,3,'the 16-pixel speck is discarded and the 17-pixel piece is kept');assert.ok(saved.assets.every(asset=>!asset.spriteSheet),'import never guesses a sheet layout');assert.equal(saved.objects.length,0);
+  for(const expected of parts.slice(0,3)){const asset=saved.assets.find(asset=>asset.w===expected.w&&asset.h===expected.h);assert.ok(asset,'native piece dimensions survive without scaling');const decoded=await decodePNG(Buffer.from(asset.src.split(',')[1],'base64'));for(let offset=0;offset<decoded.pixels.length;offset+=4)assert.deepEqual([...decoded.pixels.subarray(offset,offset+4)],expected.color,'visible source colors remain unchanged, including the detected white background')}
+  const shortcut=page.waitForEvent('filechooser');await page.locator('#canvas').focus();await page.keyboard.press('Control+i');const opaque=new Uint8Array(8*8*4).fill(255);await(await shortcut).setFiles({name:'White background.png',mimeType:'image/png',buffer:Buffer.from(await encodePNG({w:8,h:8,pixels:opaque}))});await page.waitForFunction(()=>!document.querySelector('#import-button').disabled);saved=await project(page);assert.equal(saved.assets.length,4);const white=saved.assets.find(asset=>asset.name.startsWith('White-background'));assert.deepEqual([white.w,white.h],[8,8]);assert.deepEqual((await decodePNG(Buffer.from(white.src.split(',')[1],'base64'))).pixels,opaque);assert.equal(await page.locator('#import-dialog').count(),0);assert.deepEqual(h.errors,[]);
+  if(process.env.PIXEL_MILL_SCREENSHOTS)await page.screenshot({path:path.join(process.env.PIXEL_MILL_SCREENSHOTS,'pixel-mill-direct-import-mobile.png')});
+ }finally{await h.close()}
+});
+
 test('browser: one character sheet retains source, editable row/frame hierarchy, exports and undo',{skip:!process.env.PIXEL_MILL_BROWSER,timeout:120000},async()=>{
  const h=await harness(),{page}=h;
  try{
   const pixels=new Uint8Array(128*128*4);for(let row=0;row<8;row++)for(let col=0;col<8;col++){if(row===7&&col===7)continue;for(let y=3;y<13;y++)for(let x=3;x<13;x++)pixels.set([40+row*20,40+col*20,120,255],((row*16+y)*128+col*16+x)*4)}
   const original=await encodePNG({w:128,h:128,pixels});
-  await page.locator('#import-button').click();assert.equal(await page.locator('#import-cell-size').count(),0);assert.equal(await page.locator('#import-kind').inputValue(),'sheet');
-  await page.locator('#files').setInputFiles({name:'character-eight-rows.png',mimeType:'image/png',buffer:Buffer.from(original)});
+  await tool(page,'import_image',{revision:(await tool(page,'get_level')).revision,name:'character-eight-rows',dataUrl:'data:image/png;base64,'+Buffer.from(original).toString('base64')});await page.locator('#assets-tab').click();await page.locator('.sheet-card-preview').click();
   await waitGroups(page,8);assert.equal(await page.locator('#assets-tab').getAttribute('aria-selected'),'true');
   assert.equal(await page.locator('.sprite-grid-form').count(),0,'a clear 8×8 sheet groups immediately without a setup screen');
   assert.equal(await page.locator('.sprite-frame').count(),0,'the parent shows animation groups, not 64 loose frames');
@@ -110,8 +122,7 @@ test('browser: one character sheet retains source, editable row/frame hierarchy,
 test('browser: actual JPEG animation sheet and irregular PNG atlas import without grid setup',{skip:!process.env.PIXEL_MILL_BROWSER||!process.env.PIXEL_MILL_IMPORT_CHARACTER||!process.env.PIXEL_MILL_IMPORT_ENVIRONMENT,timeout:120000},async()=>{
  const h=await harness(),{page}=h;
  try{
-  await page.locator('#import-button').click();assert.equal(await page.locator('#import-kind').inputValue(),'sheet');assert.equal(await page.locator('#import-dialog input[type=number]:visible').count(),0);
-  await page.locator('#files').setInputFiles([process.env.PIXEL_MILL_IMPORT_CHARACTER,process.env.PIXEL_MILL_IMPORT_ENVIRONMENT]);
+  for(const filename of [process.env.PIXEL_MILL_IMPORT_CHARACTER,process.env.PIXEL_MILL_IMPORT_ENVIRONMENT]){const bytes=await fs.readFile(filename),type=/\.jpe?g$/i.test(filename)?'image/jpeg':'image/png',src=await page.evaluate(async({source,type})=>{if(type==='image/png')return source;const img=new Image();img.src=source;await img.decode();const canvas=document.createElement('canvas');canvas.width=img.naturalWidth;canvas.height=img.naturalHeight;canvas.getContext('2d').drawImage(img,0,0);return canvas.toDataURL('image/png')},{source:`data:${type};base64,${bytes.toString('base64')}`,type});await tool(page,'import_image',{revision:(await tool(page,'get_level')).revision,name:path.basename(filename,path.extname(filename)),dataUrl:src})}await page.locator('#assets-tab').click();await page.locator('.sheet-card-preview').first().click();
   await waitGroups(page,8);let saved=await project(page);assert.equal(saved.assets.length,2);
   const character=saved.assets.find(a=>a.spriteSheet?.type==='character'),environment=saved.assets.find(a=>a.spriteSheet?.type==='environment');assert.ok(character);assert.ok(environment);
   assert.deepEqual([character.w,character.h,character.spriteSheet.rows,character.spriteSheet.cols,character.spriteSheet.frames.length],[1254,1254,8,8,64]);assert.deepEqual(character.spriteSheet.groups.map(g=>g.frameIds.length),Array(8).fill(8));assert.equal(character.sheet.tileSize,16);

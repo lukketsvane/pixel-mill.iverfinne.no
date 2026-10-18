@@ -22,7 +22,9 @@ Every application is one undo step. **Restore sketch** removes the treatment whi
 
 ## Character sheets and animation groups
 
-**+** opens import options with a **16 px** default. Sheet import preserves the full source image, transparent margins and pixel scale. A confident regular grid is grouped immediately; ambiguous images show a detected grid or 16 px suggestion that can be corrected.
+**+**, **Import assets** and **Ctrl/Cmd+I** open the image picker directly. Import always extracts loose pieces at native 1× scale, keeps the background, uses tolerance 18 and discards components smaller than 17 pixels. Drop and paste use the same defaults. There is no import settings dialog or later object-splitting action. Original source images remain available.
+
+Advanced agent sheet imports preserve the full source image, transparent margins and pixel scale, with explicit frame dimensions and grouping.
 
 An 8 × 8 character sheet is one `sprite_sheet` asset with eight expandable animations and 64 exact frame cells. A cell retains all its disconnected details, repeated poses and empty frames. Groups hold ordered frame references, animation speed, looping and a shared alignment origin. No pose is independently recentered. Environment sheets use the same structure for material sets and tiles.
 
@@ -34,7 +36,7 @@ Tap an animation to inspect its frames, rename it, reorder rows or frames, and p
 
 ## Editing
 
-Import multiple images, remove their background, scale with nearest-neighbor sampling, and split disconnected components. Tap an asset and then the canvas to place it. Placement automatically returns to the cursor with the new piece selected.
+Import multiple images to extract their disconnected objects automatically. Tap an asset and then the canvas to place it. Placement automatically returns to the cursor with the new piece selected.
 
 Drag a piece to move it. Its corner handle and numeric dimensions preserve aspect ratio. With two fingers on a piece, move and rotate; a horizontal pinch stretches width, a vertical pinch stretches height, and a diagonal pinch scales both. Two fingers starting on empty canvas pan and zoom the view without rotating it. Piece rotation snaps to 5° throughout the gesture and in numeric fields. Drag any number sideways to scrub; tap to type. A scrub previews live and commits one undo step. Drag the asset tray’s top grip to expand to two or four rows; drag down to collapse. Finger changes rebase the gesture; cancellation restores the original piece; each gesture is one undo step.
 
@@ -48,7 +50,7 @@ Every committed edit is cached in IndexedDB and autosaved to cloud storage after
 
 A cloud read failure preserves the project URL and presents Retry instead of silently replacing the project with an empty canvas. Already cached projects remain editable and exportable during an outage. Live updates pause in hidden tabs, notify connected listeners immediately within a server instance, and use slower conditional checks across instances. Failed connections back off instead of repeatedly querying unavailable storage. Unchanged image sources are omitted from project and room refreshes using verified source fingerprints.
 
-Large cloud requests and downloads use temporary 1 MiB parts with SHA-256 verification, keeping each request below the hosting platform's payload limit. The complete project is validated and committed atomically after all parts arrive. Interrupted transfers retain local work for retry; parts are private by capability link, removed after use and expire after 30 minutes. MCP clients retain their existing response format.
+Large cloud uploads use temporary 1 MiB parts with SHA-256 verification, keeping each request below the hosting platform's payload limit. The complete project is validated and committed atomically after all parts arrive. Vercel streams downloads directly; other hosts can use verified temporary parts. Interrupted transfers retain local work for retry; parts are private by capability link, removed after use and expire after 30 minutes. MCP clients retain their existing response format.
 
 Save/Open use self-contained JSON files. Export ZIP includes named transparent asset PNGs, placed level artwork, the editable project and a Max-format collision geometry reference. Ladders are exported separately from ledges and solid blocks.
 
