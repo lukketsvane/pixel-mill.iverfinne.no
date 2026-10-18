@@ -80,11 +80,11 @@ test('invalid artwork bindings and sheet crops reject atomically; bounded semant
  const prepared=await prepareArtwork(base,{id:'large',includeImages:false});assert.ok(prepared.request.width*prepared.request.height<=4_000_000);assert.equal(prepared.request.map,undefined);assert.equal(prepared.request.width,2000);
 });
 
-test('generation carries structured character groups; direct treatment skips characters and metadata edits invalidate handoff',async()=>{
+test('generation carries structured character groups; direct treatment skips characters and legacy metadata edits invalidate handoff',async()=>{
  const character=await groupSpriteSheet({id:'hero',name:'Hero',w:32,h:32,src:await makePNG(32,32)},{cellWidth:16,cellHeight:16,grouping:'row',sheetType:'character'});character.selectedForGeneration=true;
  const environment={id:'environment',name:'Environment',w:16,h:16,src:await makePNG(16,16),selectedForGeneration:true,sheet:{tileSize:16,role:'platform'}},base=project([shape('floor',0,0,32,16)],[character,environment]);
  const prepared=await prepareArtwork(base,{id:'characters'});assert.equal(prepared.request.references[0].type,'sprite_sheet');assert.equal(prepared.request.references[0].spriteSheet.type,'character');assert.equal(prepared.request.references[0].spriteSheet.groups.length,2);assert.equal(prepared.request.references[0].spriteSheet.frames.length,4);assert.equal(prepared.project.artRequests[0].references,undefined);
- const changed=structuredClone(prepared.project);changed.assets[0].spriteSheet.groups[0].name='Renamed animation';await assert.rejects(()=>getArtworkRequest(changed,{requestId:'characters',includeImages:false}),/reference changed/);
+ const changed=structuredClone(prepared.project);delete changed.artRequests[0].visualHashes;changed.assets[0].spriteSheet.groups[0].name='Renamed animation';await assert.rejects(()=>getArtworkRequest(changed,{requestId:'characters',includeImages:false}),/reference changed/);
  assert.throws(()=>applyAssetSheet(base,{assetId:'hero'}),/environment sheet/);assert.throws(()=>applyAssetSheet(base,{assetIds:['hero']}),/environment sheets/);const applied=applyAssetSheet(base,{assetIds:['hero','environment']});assert.deepEqual(applied.details.assetIds,['environment']);assert.equal(applied.project.objects[0].artwork.asset,'environment');assert.equal(applied.project.assets[0].src,character.src);
 });
 
@@ -103,4 +103,29 @@ test('virtual asset validation rejects missing pixels and cycles; changed source
  const {groupWorkspaceSprites}=await import('../dist/spritesheets.mjs'),{prepareAssetArtwork,applyAssetArtwork}=await import('../dist/artwork.mjs');const src=await makePNG(16,16),base=project([],[{id:'source',name:'Source',w:16,h:16,src}]),grouped=await groupWorkspaceSprites(base,{assetIds:['source'],id:'parent'}),clean=validateProject(grouped.project);
  const missing=structuredClone(clean);missing.assets=missing.assets.filter(a=>a.id!=='source');assert.throws(()=>validateProject(missing),/source/);const cycle=structuredClone(clean);cycle.assets[1].spriteSheet.frames[0].sourceAssetId='parent';assert.throws(()=>validateProject(cycle),/itself/);
  const prepared=await prepareAssetArtwork(clean,{assetId:'parent',id:'stale-asset',includeImages:false}),changed=structuredClone(prepared.project);changed.assets[0].src=await makePNG(16,16,[1,2,3,255]);await assert.rejects(()=>applyAssetArtwork(changed,{requestId:'stale-asset',dataUrl:src}),/target frames changed/);assert.equal(changed.assets.length,2);
+});
+
+
+test('generated PNG accepts single-source-pixel aspect rounding while keeping native masks exact',async()=>{
+ const original=project([shape('floor',0,0,231,81)]),prepared=await prepareArtwork(original,{id:'rounded-output',includeImages:false}),src=await makePNG(2117,743),applied=await applyArtwork(prepared.project,{requestId:prepared.request.id,dataUrl:src});assert.deepEqual(applied.project.objects.map(withoutArt),original.objects);assert.deepEqual(platforms(applied.project.objects),platforms(original.objects));
+ await assert.rejects(async()=>applyArtwork(prepared.project,{requestId:prepared.request.id,dataUrl:await makePNG(160,160)}),/PNG|aspect|match/i);
+});
+
+test('level reference regrouping and ungrouping retain prepared artwork when rendered pixels are unchanged',async()=>{
+ const asset=await groupSpriteSheet({id:'style',name:'Style',w:32,h:32,src:await makePNG(32,32)},{cellWidth:16,cellHeight:16,grouping:'row',sheetType:'environment'}),prepared=await prepareArtwork(project([shape('floor',0,0,32,16)],[asset]),{id:'visual-reference',assetIds:['style'],includeImages:false});
+ assert.match(prepared.request.visualHashes[0],/^[a-f0-9]{16}$/);assert.deepEqual(validateProject(JSON.parse(JSON.stringify(prepared.project))).artRequests[0].visualHashes,prepared.request.visualHashes);assert.equal(prepared.request.references[0].src,undefined);
+ const renamed=structuredClone(prepared.project);renamed.assets[0].spriteSheet.groups[0].name='Same pixels';assert.equal((await getArtworkRequest(renamed,{requestId:'visual-reference',includeImages:false})).references[0].src,undefined);
+ const ungrouped=structuredClone(prepared.project);delete ungrouped.assets[0].spriteSheet;delete ungrouped.assets[0].type;
+ const request=await getArtworkRequest(ungrouped,{requestId:'visual-reference'});assert.equal(request.references[0].src,asset.src);const applied=await applyArtwork(ungrouped,{requestId:request.id,dataUrl:await makePNG(request.width,request.height)});assert.deepEqual(applied.project.objects.map(withoutArt),prepared.project.objects);assert.equal(applied.project.artRequests[0].status,'applied');
+ const changed=structuredClone(ungrouped);changed.assets[0].src=await makePNG(32,32,[200,99,3,255]);await assert.rejects(()=>getArtworkRequest(changed,{requestId:'visual-reference'}),/reference changed/);await assert.rejects(()=>applyArtwork(changed,{requestId:'visual-reference',dataUrl:asset.src}),/reference changed/);
+ const legacy=structuredClone(ungrouped);delete legacy.artRequests[0].visualHashes;await assert.rejects(()=>getArtworkRequest(legacy,{requestId:'visual-reference'}),/reference changed/);
+ for(const invalid of [null,[],['invalid'],['0123456789abcdef','0123456789abcdef']]){const bad=structuredClone(prepared.project);bad.artRequests[0].visualHashes=invalid;assert.throws(()=>validateProject(bad),/visual reference fingerprints/)}
+});
+
+test('visual reference fallback preserves scoped frame pixels and native raster dimensions',async()=>{
+ const pixels=new Uint8Array(16*32*4);for(let y=0;y<32;y++)for(let x=0;x<16;x++)pixels.set(y<16?[80,20,40,255]:[30,100,90,255],(y*16+x)*4);
+ const asset=await groupSpriteSheet({id:'style',name:'Style',w:16,h:32,src:dataURL(await encodePNG({w:16,h:32,pixels}))},{cellWidth:16,cellHeight:16,grouping:'row',sheetType:'environment'});asset.referenceSelection={groupIds:[asset.spriteSheet.groups[0].id]};const prepared=await prepareArtwork(project([shape('floor',0,0,16,16)],[asset]),{id:'scoped-visual',assetIds:['style'],includeImages:false});
+ const changed=structuredClone(prepared.project);changed.assets[0].referenceSelection.groupIds=[asset.spriteSheet.groups[1].id];await assert.rejects(()=>getArtworkRequest(changed,{requestId:'scoped-visual'}),/reference changed/);
+ const full=structuredClone(prepared.project);delete full.assets[0].referenceSelection;await assert.rejects(()=>getArtworkRequest(full,{requestId:'scoped-visual'}),/reference changed/);
+ const plain=await prepareArtwork(project([shape('floor',0,0,16,16)],[{id:'plain',name:'Plain',w:8,h:4,src:await makePNG(8,4)}]),{id:'reference-dimensions',assetIds:['plain'],includeImages:false}),reshaped=structuredClone(plain.project);reshaped.assets[0].w=4;reshaped.assets[0].h=8;reshaped.assets[0].src=await makePNG(4,8);assert.deepEqual((await decodePNG(pngBytes(plain.project.assets[0].src))).pixels,(await decodePNG(pngBytes(reshaped.assets[0].src))).pixels);await assert.rejects(()=>getArtworkRequest(reshaped,{requestId:'reference-dimensions'}),/reference changed/);
 });

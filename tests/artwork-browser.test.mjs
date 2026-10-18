@@ -60,7 +60,7 @@ test('browser: naming, live GPT edits, reopen without duplicates, delete and res
  try{
   await page.locator('#menu-button').click();await page.locator('#save').click();assert.match(await page.locator('#status').innerText(),/name before saving/);assert.equal((await cache()).list.length,0);assert.equal(h.requests.filter(r=>r.path==='/api/projects'&&r.method==='POST').length,0);
   await page.locator('#project-name').fill('Live project');await page.locator('#project-name').blur();await until(async()=>!!(await cache()).active?.token);const original=(await cache()).active;
-  await page.locator('#agent-button').click();await page.locator('#agent-connect').click();await until(async()=>!!(await cache()).active?.roomToken);const endpoint=await page.locator('#agent-url').inputValue();await page.locator('#close-agent').click();
+  await page.locator('#agent-button').click();await page.waitForFunction(()=>document.querySelector('#agent-url').value.includes('/mcp/'));await until(async()=>!!(await cache()).active?.roomToken);const endpoint=await page.locator('#agent-url').inputValue();await page.locator('#close-agent').click();
   const rpc=async(name,args={})=>(await(await page.request.post(endpoint,{data:{jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}}})).json()).result;
   const initial=(await rpc('get_level')).structuredContent;
   const edit=await rpc('edit_level',{revision:initial.revision,operations:[{type:'rename',name:'GPT live change'},{type:'block',id:'live-platform',x:0,y:0,width:80,height:16}]});assert.equal(edit.isError,undefined);
@@ -96,7 +96,7 @@ test('browser: coherent artwork and existing sheets complete the round trip on t
   await local(page,'edit_level',{revision:level.revision,operations:[{type:'asset',id:sheetId,changes:{selectedForGeneration:true,sheet:{tileSize:16,role:'platform'}}}]});
   const before=await savedProject(page),originalGeometry=geometry(before);
   // Use the actual Streamable HTTP room protocol, then observe it arrive in the editor.
-  await page.locator('#menu-button').click();await page.locator('#agent-button').click();await page.locator('#agent-connect').click();
+  await page.locator('#menu-button').click();await page.locator('#agent-button').click();await page.waitForFunction(()=>document.querySelector('#agent-url').value.includes('/mcp/'));
   await page.waitForFunction(()=>document.querySelector('#agent-url').value.includes('/mcp/'));
   const endpoint=await page.locator('#agent-url').inputValue();await page.locator('#close-agent').click();
   const rpc=async(name,args={})=>{const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})});assert.equal(response.status,200);const result=(await response.json()).result;if(result.isError)throw Error(result.content[0].text);return result};
@@ -145,7 +145,7 @@ test('browser: a real externally generated PNG applies, exports, and undoes on i
   if(process.env.PIXEL_MILL_REFERENCE_IMAGE){level=await local(page,'get_level');const imported=await local(page,'import_image',{revision:level.revision,dataUrl:dataURL(await fs.readFile(process.env.PIXEL_MILL_REFERENCE_IMAGE)),name:'Selected terrain reference'});level=await local(page,'get_level');await local(page,'edit_level',{revision:level.revision,operations:[{type:'asset',id:imported.assetIds[0],changes:{selectedForGeneration:true,sheet:{tileSize:16,role:'platform'}}}]})}
   const before=await savedProject(page);await page.locator('#fit').click();
   if(process.env.PIXEL_MILL_SCREENSHOTS)await page.screenshot({path:path.join(process.env.PIXEL_MILL_SCREENSHOTS,'pixel-mill-genuine-before.png')});
-  await page.locator('#menu-button').click();await page.locator('#agent-button').click();await page.locator('#agent-connect').click();await page.waitForFunction(()=>document.querySelector('#agent-url').value.includes('/mcp/'));const endpoint=await page.locator('#agent-url').inputValue();await page.locator('#close-agent').click();
+  await page.locator('#menu-button').click();await page.locator('#agent-button').click();await page.waitForFunction(()=>document.querySelector('#agent-url').value.includes('/mcp/'));await page.waitForFunction(()=>document.querySelector('#agent-url').value.includes('/mcp/'));const endpoint=await page.locator('#agent-url').inputValue();await page.locator('#close-agent').click();
   const rpc=async(name,args={})=>{const response=await fetch(endpoint,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name,arguments:args}})});assert.equal(response.status,200);const result=(await response.json()).result;if(result.isError)throw Error(result.content[0].text);return result};
   level=value(await rpc('get_level'));const prepared=await rpc('prepare_artwork',{revision:level.revision,includeImages:true}),request=value(prepared).request;assert.equal(request.width,256);assert.equal(request.height,256);assert.equal(request.objects.length,6);
   const actualGeneratedSource=dataURL(await fs.readFile(process.env.PIXEL_MILL_GENERATED_IMAGE));
@@ -158,7 +158,7 @@ test('browser: a real externally generated PNG applies, exports, and undoes on i
  }finally{await h.close()}
 });
 
-test('browser: direct sketching, asset references, ZIP handoff and returned-file application work through mobile controls', {skip:!process.env.PIXEL_MILL_BROWSER,timeout:90000},async()=>{
+test('browser: direct sketching, asset references, connected artwork handoff and returned-file application work through mobile controls', {skip:!process.env.PIXEL_MILL_BROWSER,timeout:90000},async()=>{
  const h=await browserHarness(),{page}=h;
  try{
   assert.equal(await page.getByRole('tab').count(),2);assert.equal(await page.locator('#block-color').isVisible(),false);
@@ -175,7 +175,7 @@ test('browser: direct sketching, asset references, ZIP handoff and returned-file
   if(process.env.PIXEL_MILL_SCREENSHOTS)await page.screenshot({path:path.join(process.env.PIXEL_MILL_SCREENSHOTS,'pixel-mill-assets-mobile.png')});
   const exportSheet=page.waitForEvent('download');await page.locator('#export-sheet').click();assert.match((await exportSheet).suggestedFilename(),/\.png$/);
   await page.locator('#apply-sheet').click();await page.waitForFunction(()=>document.querySelector('#level-tab').getAttribute('aria-selected')==='true');level=await local(page,'get_level');assert.equal(level.objects.find(o=>o.role==='platform').artwork.mode,'terrain');assert.equal(level.objects.find(o=>o.role==='background').artwork,undefined);
-  await page.locator('#artwork-menu > summary').click();await page.locator('#treatment-scope').click();const handoff=page.waitForEvent('download');await page.locator('#prepare-artwork').click();const bundle=await handoff;assert.match(bundle.suggestedFilename(),/\.zip$/);assert.equal(await page.locator('#handoff-dialog').isVisible(),true);assert.match(await page.locator('#handoff-prompt').inputValue(),/ChatGPT image generation/);await page.locator('#close-handoff').click();const snapshot=await savedProject(page),request=snapshot.artRequests.at(-1);assert.equal(request.objects.length,2);assert.equal(request.assetIds.length,1);assert.equal(await page.locator('#apply-artwork').isEnabled(),true);
+  await page.locator('#artwork-menu > summary').click();await page.locator('#treatment-scope').click();await savedProject(page);let handoffDownloads=0;const onDownload=()=>handoffDownloads++;page.on('download',onDownload);await page.locator('#prepare-artwork').click();await page.waitForFunction(()=>document.querySelector('#artwork-status').dataset.state==='waiting');assert.equal(handoffDownloads,0);assert.equal(await page.locator('dialog[open]').count(),0);page.off('download',onDownload);const snapshot=await savedProject(page),request=snapshot.artRequests.at(-1);assert.equal(request.objects.length,2);assert.equal(request.assetIds.length,1);assert.equal(await page.locator('#apply-artwork').isEnabled(),true);
   const source=await png(request.width,request.height);await page.locator('#artwork-file').setInputFiles({name:request.id+'.png',mimeType:'image/png',buffer:Buffer.from(source.split(',')[1],'base64')});await localArtwork(page,{mode:'atlas'});
   const applied=await savedProject(page);assert.deepEqual(geometry(applied),geometry(snapshot));
   for(const viewport of [{width:390,height:844},{width:320,height:568},{width:844,height:390}]){

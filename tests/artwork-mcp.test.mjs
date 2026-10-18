@@ -4,7 +4,7 @@ import {createServer} from 'node:http';
 import {once} from 'node:events';
 import {agentFetch} from '../worker/api.mjs';
 import {validateProject,platforms} from '../dist/engine.mjs';
-import {projectDiff,applyDiff} from '../dist/agent.mjs';
+import {projectDiff,applyDiff,agentTools} from '../dist/agent.mjs';
 import {encodePNG,dataURL,decodePNG,pngBytes} from '../dist/png.mjs';
 import {designWithAgent} from '../worker/chat.mjs';
 
@@ -23,16 +23,16 @@ async function fixture(){return validateProject({format:'max-level-studio',versi
  ]})}
 const withoutArt=project=>project.objects.map(({artwork,...object})=>object);
 const roots=project=>{const children=new Set(project.assets.flatMap(asset=>asset.spriteSheet?.frames.map(frame=>frame.sourceAssetId).filter(Boolean)||[]));return project.assets.filter(asset=>!asset.hidden&&!children.has(asset.id))};
-async function httpRoom(t,project){
+async function httpRoom(t,project,fetcher=fetch){
  const env={BUCKET:new ArtworkBucket()};
- const server=createServer(async(req,res)=>{try{const chunks=[];for await(const chunk of req)chunks.push(chunk);const response=await agentFetch(new Request('http://'+req.headers.host+req.url,{method:req.method,headers:req.headers,...(chunks.length?{body:Buffer.concat(chunks)}:{})}),env);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()))}catch(error){res.writeHead(500);res.end(error.message)}});
+ const server=createServer(async(req,res)=>{try{const chunks=[];for await(const chunk of req)chunks.push(chunk);const response=await agentFetch(new Request('http://'+req.headers.host+req.url,{method:req.method,headers:req.headers,...(chunks.length?{body:Buffer.concat(chunks)}:{})}),env,fetcher);res.writeHead(response.status,Object.fromEntries(response.headers));res.end(Buffer.from(await response.arrayBuffer()))}catch(error){res.writeHead(500);res.end(error.message)}});
  server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>server.close(resolve)));
  const origin='http://127.0.0.1:'+server.address().port;
  const room=await(await fetch(origin+'/api/rooms',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(project)})).json();assert.ok(room.token);
  let id=0;
  const tool=async(name,args={})=>{const response=await fetch(origin+'/mcp/'+room.token,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:++id,method:'tools/call',params:{name,arguments:args}})});assert.equal(response.status,200);return(await response.json()).result};
  const state=async()=> (await tool('get_level',{mode:'full'})).structuredContent;
- return {tool,state,rawState:async()=>(await(await fetch(origin+'/api/rooms/'+room.token)).json()).project};
+ return {tool,state,patch:async diff=>(await(await fetch(origin+'/api/rooms/'+room.token,{method:'PATCH',headers:{'content-type':'application/json'},body:JSON.stringify({diff})})).json()),stored:()=>[...env.BUCKET.data.values()].map(value=>JSON.parse(value.text)),rawState:async()=>(await(await fetch(origin+'/api/rooms/'+room.token)).json()).project};
 }
 
 test('real HTTP MCP handoff, coherent PNG apply, region isolation, stale layout conflict, and one-step undo',async t=>{
@@ -145,4 +145,38 @@ test('embedded chat defaults to selected parent references without duplicating t
    return Response.json({status:'completed',output:[{type:'message',content:[{type:'output_text',text:'The selected reference is ready.'}]}]});
   });
  }
+});
+
+
+test('ChatGPT file return applies over HTTP without manual image bytes and safely replays a lost reply',async t=>{
+ const original=await fixture();original.objects.find(o=>o.id==='floor').mask={w:4,h:2,runs:[[0,0,1],[0,3,4],[1,0,4]]};let downloads=0,source;
+ const {tool,state,rawState,stored}=await httpRoom(t,original,async(url,options)=>{downloads++;assert.equal(options.redirect,'error');return new Response(pngBytes(source),{headers:{'content-type':'image/png'}})});
+ const descriptor=agentTools.find(tool=>tool.name==='apply_artwork');assert.deepEqual(descriptor._meta['openai/fileParams'],['file']);assert.deepEqual(Object.keys(descriptor.inputSchema.properties.file.properties).sort(),['download_url','file_id','file_name','mime_type']);assert.deepEqual(descriptor.inputSchema.properties.file.required,['download_url','file_id']);
+ const prepared=await tool('prepare_artwork',{revision:0,objectIds:['floor'],includeImages:true}),request=prepared.structuredContent.request;assert.equal(prepared.content.filter(item=>item.type==='image').length,2);source=await png(request.width,request.height);
+ const file={download_url:'https://files.oaiusercontent.com/return.png?signature=private-fixture',file_id:'file-generated-level',mime_type:'image/png',file_name:'Generated level.png'},result=await tool('apply_artwork',{revision:1,requestId:request.id,file});assert.equal(result.isError,undefined);assert.equal(result.structuredContent.revision,2);assert.equal(downloads,1);
+ const applied=await rawState();assert.deepEqual(withoutArt(applied),withoutArt(original));assert.deepEqual(platforms(applied.objects),platforms(original.objects));assert.equal(applied.artRequests[0].status,'applied');assert.equal(applied.assets.find(a=>a.id===result.structuredContent.assetId).src,source);assert.ok(stored().every(record=>!JSON.stringify(record).includes('private-fixture')));
+ const replay=await tool('apply_artwork',{revision:1,requestId:request.id,file:{...file,download_url:'https://files.oaiusercontent.com/expired'}});assert.equal(replay.isError,undefined);assert.equal(replay.structuredContent.replayed,true);assert.equal(replay.structuredContent.revision,2);assert.equal(downloads,1);assert.deepEqual(await rawState(),applied);
+ const different=await tool('apply_artwork',{revision:2,requestId:request.id,file:{...file,file_id:'file-other'}});assert.equal(different.isError,true);assert.equal(downloads,1);
+ await tool('undo_level',{revision:2});assert.deepEqual(withoutArt(await state()),withoutArt(original));assert.equal((await rawState()).objects.some(o=>o.artwork),false);
+});
+
+test('ChatGPT file download preserves concurrent independent edits and rejects changed masks or style references',async t=>{
+ for(const change of ['unrelated','mask','reference','pixels'])await t.test(change,async t=>{
+  const original=await fixture();let tool,source;
+  const connection=await httpRoom(t,original,async()=>{if(change==='pixels'){const raster=await decodePNG(pngBytes(original.assets[0].src));raster.pixels[0]^=255;const next={...original,assets:[{...original.assets[0],src:dataURL(await encodePNG(raster))}]};const updated=await connection.patch(projectDiff(original,next));assert.equal(updated.error,undefined);return new Response(pngBytes(source),{headers:{'content-type':'image/png'}})}const operations=change==='unrelated'?[{type:'update',id:'flower',changes:{x:46}}]:change==='mask'?[{type:'update',id:'floor',changes:{mask:{w:4,h:2,runs:[[0,0,4]]}}}]:[{type:'asset',id:'terrain',changes:{sheet:{tileSize:8}}}];const edited=await tool('edit_level',{revision:1,operations});assert.equal(edited.isError,undefined);return new Response(pngBytes(source),{headers:{'content-type':'image/png'}})});tool=connection.tool;
+  const prepared=await tool('prepare_artwork',{revision:0,objectIds:['floor']}),request=prepared.structuredContent.request;source=await png(request.width,request.height);
+  const result=await tool('apply_artwork',{revision:1,requestId:request.id,file:{file_id:'file-concurrent-'+change,download_url:'https://files.oaiusercontent.com/generated.png'}}),level=await connection.rawState();
+  if(change==='unrelated'||change==='reference'){assert.equal(result.isError,undefined);assert.equal(result.structuredContent.rebased,true);if(change==='unrelated')assert.equal(level.objects.find(o=>o.id==='flower').x,46);else assert.equal(level.assets.find(a=>a.id==='terrain').sheet.tileSize,8);assert.equal(level.artRequests[0].status,'applied')}
+  else{assert.equal(result.isError,true);assert.match(result.content[0].text,/chang/i);assert.equal(level.artRequests[0].status,'prepared');assert.equal(level.objects.some(o=>o.artwork),false);assert.equal(level.assets.length,original.assets.length)}
+ });
+});
+
+
+test('file return accepts an older revision when only unrelated objects changed before download',async t=>{
+ let downloads=0,source;const {tool,rawState}=await httpRoom(t,await fixture(),async()=>{downloads++;return new Response(pngBytes(source),{headers:{'content-type':'image/png'}})});
+ const prepared=await tool('prepare_artwork',{revision:0,objectIds:['floor']}),request=prepared.structuredContent.request;source=await png(request.width,request.height);
+ await tool('edit_level',{revision:1,operations:[{type:'update',id:'flower',changes:{x:46}}]});const file={file_id:'file-stale-revision',download_url:'https://files.oaiusercontent.com/generated.png'};
+ for(const revision of [undefined,-1,99]){const invalid=await tool('apply_artwork',{revision,requestId:request.id,file});assert.equal(invalid.isError,true);assert.equal(downloads,0)}
+ const result=await tool('apply_artwork',{revision:1,requestId:request.id,file});assert.equal(result.isError,undefined);assert.equal(result.structuredContent.rebased,true);assert.equal(result.structuredContent.revision,3);assert.equal(downloads,1);assert.equal((await rawState()).objects.find(o=>o.id==='flower').x,46);
+ await tool('undo_level',{revision:3});const undone=await rawState();assert.equal(undone.objects.find(o=>o.id==='flower').x,46);assert.equal(undone.objects.some(o=>o.artwork),false);
 });

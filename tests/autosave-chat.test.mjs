@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {Autosave} from '../dist/autosave.mjs';
 import {agentFetch} from '../worker/api.mjs';
 import {designWithAgent} from '../worker/chat.mjs';
+import {createProjectToken} from '../dist/project-state.mjs';
+import {projectDiff} from '../dist/agent.mjs';
 class Bucket{constructor(){this.map=new Map();this.n=0}async get(k){const v=this.map.get(k);return v?{etag:v.etag,json:async()=>JSON.parse(v.text)}:null}async put(k,text,options={}){const old=this.map.get(k),c=options.onlyIf;if(c?.etagMatches&&old?.etag!==c.etagMatches||c?.etagDoesNotMatch==='*'&&old)return null;const etag=String(++this.n);this.map.set(k,{text,etag});return{etag}}async delete(k){for(const key of Array.isArray(k)?k:[k])this.map.delete(key)}}
 class Cache{constructor(){this.map=new Map()}async put(p){this.map.set(p.id,structuredClone(p))}async get(id){return structuredClone(this.map.get(id))}async list(){return[...this.map.values()]}async select(id){this.id=id}active(){return this.get(this.id)}}
 const empty=()=>({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});
@@ -30,4 +32,19 @@ test('chat endpoint persists a successful draft as one undo and rejects a stale 
  const created=await(await call('/api/rooms',empty())).json();const previous=globalThis.fetch;let n=0;
  globalThis.fetch=async()=>Response.json({status:'completed',output:n++===0?[{type:'function_call',call_id:'draft',name:'edit_level',arguments:JSON.stringify({revision:0,operations:[{type:'block',id:'one'},{type:'block',id:'two',x:40}]})}]:[{type:'message',content:[{type:'output_text',text:'Added two platforms.'}]}]});
  try{const response=await call('/api/rooms/'+created.token+'/chat',{revision:0,message:'Two platforms',grid:4});assert.equal(response.status,200);const answer=await response.json();assert.equal(answer.room.project.objects.length,2);assert.equal(answer.room.revision,1);const stale=await call('/api/rooms/'+created.token+'/chat',{revision:0,message:'Move them'});assert.equal(stale.status,409);const undone=await(await call('/api/rooms/'+created.token,{name:'undo_level',arguments:{revision:1}})).json();assert.equal(undone.structuredContent.objects.length,0)}finally{globalThis.fetch=previous}
+});
+
+
+test('automatic draft links retry idempotently and become durable when the draft is named',async()=>{
+ const env={BUCKET:new Bucket()},cache=new Cache(),previous=globalThis.fetch;let project=empty(),shared=null;
+ globalThis.fetch=(path,options)=>agentFetch(new Request('https://pixel.example'+path,options),env);
+ const api={snapshot:()=>structuredClone(project),restore:async p=>project=structuredClone(p),status(){},link(){},shared:()=>shared};const save=new Autosave(api,cache);
+ try{
+  await save.init();const connectionToken=createProjectToken(),body=JSON.stringify({connectionToken,project}),created=await(await fetch('/api/rooms',{method:'POST',body})).json();assert.equal(created.token,connectionToken);assert.equal(created.revision,0);
+  shared={token:connectionToken,queue:Promise.resolve(),acknowledge(){},live:{}};save.acceptRemote(created,connectionToken);project.name='Named after drawing';save.changed();
+  const edited=await(await fetch('/api/rooms/'+connectionToken,{method:'PATCH',body:JSON.stringify({diff:projectDiff(created.project,project)})})).json();save.acceptRemote(edited,connectionToken);assert.equal(save.dirty,false);await save.flush();
+  assert.ok(save.record.token);assert.equal(save.record.roomToken,connectionToken);assert.equal(save.record.project.name,'Named after drawing');assert.equal(save.blocked,null);
+  const recovered=await(await fetch('/api/rooms',{method:'POST',body})).json();assert.equal(recovered.token,connectionToken);assert.equal(recovered.project.name,'Named after drawing');assert.equal(recovered.projectToken,save.record.token);
+  const link=await(await fetch('/api/rooms',{method:'POST',body:JSON.stringify({projectToken:save.record.token,revision:0})})).json();assert.equal(link.token,connectionToken);assert.equal(link.project.name,'Named after drawing');assert.equal(link.error,undefined);
+ }finally{clearTimeout(save.timer);save.live.stop();globalThis.fetch=previous}
 });

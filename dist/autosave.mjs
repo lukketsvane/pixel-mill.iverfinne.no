@@ -50,7 +50,7 @@ export class Autosave{
   try{this.record.project=this.viewProject?applyDiff(this.record.project,projectDiff(this.viewProject,view)):view}catch{this.record.project=view;this.blocked='Conflict · local copy kept'}
   this.viewProject=structuredClone(view);this.dirty=true;void this.cacheCurrent();clearTimeout(this.timer);
   this.status(this.blocked||(!projectName(view.name)?'Name project to save':this.shared?.paused?'Conflict · local copy kept':'Saving…'));
-  if((!this.shared?.token||this.record.token)&&!this.blocked&&projectName(view.name))this.timer=setTimeout(()=>void this.flush(),750);
+  if(!this.blocked&&projectName(view.name))this.timer=setTimeout(()=>void this.flush(),750);
  }
  async applyView(next,generation=this.generation,externalGuard=()=>true){const record=this.record,epoch=this.epoch;
   const guard=()=>this.record===record&&epoch===this.epoch&&generation===this.generation&&!this.api.busy?.()&&externalGuard();
@@ -60,9 +60,9 @@ export class Autosave{
  }
  async retry(){this.retryAt=0;this.failures=0;await this.flush();if(!this.dirty)await(this.shared?.token?this.shared.poll():this.pull())}
  async flush(){
-  clearTimeout(this.timer);if(!this.ready||!this.dirty)return this.cacheQueue;if(this.saving)return this.saving;
+  clearTimeout(this.timer);if(!this.ready||!this.dirty&&!(this.shared?.token&&!this.record.token&&projectName(this.record.project.name)))return this.cacheQueue;if(this.saving)return this.saving;
   if(Date.now()<this.retryAt)return this.cacheQueue;
-  if(this.shared?.token&&!this.record.token){await this.shared.queue;return this.cacheCurrent()}
+  if(this.shared?.token&&!this.record.token){const current=this.record,epoch=this.epoch;await this.shared.queue;if(current!==this.record||epoch!==this.epoch)return;if(this.saving)return this.saving;if(!projectName(this.record.project.name))return this.cacheCurrent();this.dirty=true}
   if(this.blocked||!projectName(this.record.project.name))return this.cacheCurrent();
   const epoch=this.epoch,record=this.record;
   this.saving=(async()=>{while(this.dirty&&epoch===this.epoch&&record===this.record&&!this.blocked){
@@ -79,6 +79,8 @@ export class Autosave{
       project=applyDiff(base,diff);await this.cacheCurrent();
      }
      response=await this.request('/api/projects/'+record.token,{method:diff?'PATCH':'PUT',body:JSON.stringify({revision:record.revision,...(diff?{diff,mutationId:record.pendingMutation.id}:{project}),knownAssets:projectSourceVersions(project.assets)})});
+    }else if(this.shared?.token){
+     response=await this.request('/api/projects',{method:'POST',body:JSON.stringify({roomToken:this.shared.token,knownAssets:projectSourceVersions(project.assets)})});
     }else{
      record.pendingToken??=createProjectToken();record.pendingProject??=structuredClone(project);project=structuredClone(record.pendingProject);await this.cacheCurrent();
      response=await this.request('/api/projects',{method:'POST',body:JSON.stringify({project,token:record.pendingToken,knownAssets:projectSourceVersions(project.assets)})});

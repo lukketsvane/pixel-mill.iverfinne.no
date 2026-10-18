@@ -10,15 +10,22 @@ export class SharedLevel{
  }
  get connected(){return !!this.token&&!this.paused}
  request(path,options={}){return cloudRequest(path,options)}
- async connect(token){
-  await this.queue;const project=await this.api.beforeConnect?.(token);const epoch=++this.epoch;this.live.stop();this.paused=false;
-  const starting=this.api.snapshot();let room;
+ connect(token){
+  if(this.connecting)return this.connecting;
+  const epoch=++this.epoch;this.live.stop();this.paused=true;
+  this.connecting=this.connectRoom(token,epoch).finally(()=>{this.connecting=null});return this.connecting;
+ }
+ async connectRoom(token,epoch){
+  await this.queue;if(epoch!==this.epoch)return;
+  const project=await this.api.beforeConnect?.(token);if(epoch!==this.epoch)return;
+  const starting=project?.project||this.api.committedSnapshot?.()||this.api.snapshot();let room;
   try{
-   if(token){this.token=token;room=await this.request('/api/rooms/'+token)}
-   else{room=await this.request('/api/rooms',{method:'POST',body:JSON.stringify(project?.projectToken?project:starting)});if(epoch!==this.epoch)return;this.token=room.token}
+   if(token)room=await this.request('/api/rooms/'+token);
+   else room=await this.request('/api/rooms',{method:'POST',body:JSON.stringify(project?.projectToken?project:project?.connectionToken?{connectionToken:project.connectionToken,project:starting}:starting)});
    if(epoch!==this.epoch)return;
-   this.revision=room.revision;this.applied=-1;this.incoming=null;this.lastControl=null;
-   if(!token&&JSON.stringify(starting)!==JSON.stringify(this.api.snapshot()))await this.push(starting,this.api.snapshot());
+   this.token=token||room.token;this.paused=false;this.revision=room.revision;this.applied=-1;this.incoming=null;this.lastControl=null;
+   const current=this.api.committedSnapshot?.()||this.api.snapshot(),base=project?.baseProject||starting;
+   if((!token||project?.baseProject)&&JSON.stringify(base)!==JSON.stringify(current))await this.push(base,current);
    else await this.accept(room);
    if(epoch!==this.epoch)return;
    this.live.start('/api/rooms/'+this.token);void this.live.pull();this.capture();this.api.connection?.();return this.url();

@@ -5,7 +5,7 @@ import {SharedLevel} from './shared.mjs';
 import {installPlayInput} from './play-input.mjs';
 import {paintPixelLayer} from './pixel-view.mjs';
 import {Autosave} from './autosave.mjs';
-import {projectName,hasProjectChanges} from './project-state.mjs';
+import {projectName,hasProjectChanges,createProjectToken} from './project-state.mjs';
 import {installProjectControls} from './project-controls.mjs';
 import {installChat} from './chat.mjs';
 import {installAssetTray} from './asset-tray.mjs';
@@ -29,7 +29,8 @@ function icon(el,name){el.innerHTML=`<svg viewBox="0 0 24 24" aria-hidden="true"
 $$('[data-icon]').forEach(el=>icon(el,el.dataset.icon));
 const app=$('#app'),canvas=$('#canvas'),ctx=canvas.getContext('2d',{alpha:false}),pixelBuffer=document.createElement('canvas');let paint=ctx,pixelView=true;
 let state={name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]},camera={x:0,y:0,z:3,rotation:0},width=0,height=0,dpr=1;
-let input=null,playControls=null,shared=null,autosave=null,localRevision=0,workspaces=null,spriteWorkspace=null;
+let input=null,playControls=null,shared=null,autosave=null,localRevision=0,workspaces=null,spriteWorkspace=null,handoffRequestId=null;
+let agentLinkTimer=null,agentLinkPromise=null,agentLinkRecord=null,agentLinkFailures=0;
 let sketchRole='platform',sketchColor='#91e8c1',regionIds=null;
 let cropping=false,opacityBefore=null,numberScrub=null,scrubEdit=null,assetTray=null,assetRows=1,expandedAssetGroup=null;
 let selected=null,tool='select',brush=null,grid=4,gesture=null,playing=false,player=null,colliders=[],editorCamera=null,importing=false;
@@ -55,7 +56,7 @@ document.addEventListener('dblclick',e=>{if(!e.target.closest('input,select'))e.
 document.addEventListener('wheel',e=>{if(e.ctrlKey||e.metaKey)e.preventDefault()},{passive:false});
 const current=()=>state.objects.find(o=>o.id===selected);
 function checkpoint(before=snapshot(state)){localRevision++;const record=autosave?.record,epoch=shared?.epoch;queueMicrotask(()=>{if(record!==autosave?.record||epoch!==shared?.epoch)return;autosave?.changed();shared?.push(before,snapshot(state))});history.push(before);if(history.length>40)history.shift();future=[];$('#undo').disabled=false}
-function refresh(keepDimensions=false){const o=current();$('#inspector').hidden=playing||!o||tool==='block'||tool==='region';if(!keepDimensions)$('#dimensions').hidden=true;if(o){$('#piece-name').value=o.name;$('#piece-kind').value=o.kind;$('#piece-w').value=o.w;$('#piece-h').value=o.h;$('#piece-inset').value=o.inset;$('#piece-inset').max=o.h-1;$('#piece-angle').value=Math.round(o.rotation||0);for(const id of ['piece-name','piece-kind','piece-w','piece-h','piece-inset','piece-angle','flip','duplicate','delete'])$('#'+id).disabled=!!o.locked}if(document.activeElement!==$('#project-name'))$('#project-name').value=projectName(state.name)||'';$('#undo').disabled=shared?.connected?!shared.canUndo:!history.length;$('#assets-button').hidden=!state.assets.length;$('#coordinates').textContent=`${Math.round(camera.z*100)}%`;if(!adjustBefore)syncColorSliders();workspaces?.refresh()}
+function refresh(keepDimensions=false){const o=current();$('#inspector').hidden=playing||!o||tool==='block'||tool==='region';if(!keepDimensions)$('#dimensions').hidden=true;if(o){$('#piece-name').value=o.name;$('#piece-kind').value=o.kind;$('#piece-w').value=o.w;$('#piece-h').value=o.h;$('#piece-inset').value=o.inset;$('#piece-inset').max=o.h-1;$('#piece-angle').value=Math.round(o.rotation||0);for(const id of ['piece-name','piece-kind','piece-w','piece-h','piece-inset','piece-angle','flip','duplicate','delete'])$('#'+id).disabled=!!o.locked}if(document.activeElement!==$('#project-name'))$('#project-name').value=projectName(state.name)||'';$('#undo').disabled=shared?.connected?!shared.canUndo:!history.length;$('#assets-button').hidden=!state.assets.length;$('#coordinates').textContent=`${Math.round(camera.z*100)}%`;if(!adjustBefore)syncColorSliders();workspaces?.refresh();refreshArtworkHandoff()}
 function colorTargets(){return colorScope==='all'||!current()?state.objects.filter(o=>!o.collisionOnly&&!o.locked):current().collisionOnly||current().locked?[]:[current()]}
 function syncColorSliders(){const o=colorTargets()[0];for(const key of ['hue','saturation','brightness','black','white'])$('#color-'+key).value=o?.adjust?.[key]??(key==='white'?255:0);$('#color-scope').textContent=colorScope==='all'?'All':'Selected';$('#color-scope').setAttribute('aria-pressed',String(colorScope==='all'));for(const el of $$('#color-toolbar input'))el.disabled=!o}
 $('#color-button').onclick=()=>{colorScope=current()?'selected':'all';$('#color-toolbar').hidden=!$('#color-toolbar').hidden;$('#color-button').setAttribute('aria-pressed',String(!$('#color-toolbar').hidden));syncColorSliders()};
@@ -66,7 +67,7 @@ $('#color-reset').onclick=()=>{const targets=colorTargets();if(!targets.some(o=>
 function activeBrushSize(){return tool==='mask'?maskWidth:tool==='collision'?collisionWidth:paintWidth}
 function updateBrush(){const size=activeBrushSize(),painting=['paint','mask','collision'].includes(tool);$('#brush-options').hidden=!painting;$('#brush-size').max=tool==='collision'?128:256;$('#brush-number').max=$('#brush-size').max;$('#brush-size').value=size;$('#brush-number').value=size;$('#brush-value').textContent=tool==='mask'?'Eraser':'Brush';$('#brush-pressure').checked=penPressure;$('#erase-all').checked=eraseAll;$('#erase-scope').hidden=tool!=='mask';$('#brush-layer').textContent=sketchRole==='platform'?'Walkable':sketchRole==='background'?'Background':'Decoration'}
 function changeBrush(value){value=Math.round(clamp(Number(value)||1,1,tool==='collision'?128:256));if(tool==='mask')maskWidth=value;else if(tool==='collision')collisionWidth=value;else paintWidth=value;updateBrush();saveViewPrefs()}
-function setTool(next){if(input?.active())input.cancel();cropping=false;$('#context-menu').hidden=true;$('#block-color').hidden=true;tool=next;updateBrush();brush=next==='stamp'?brush:null;if(next!=='mask')selected=null;$$('[data-tool]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tool===next)));$('#hint').textContent=next==='paint'?'Draw masks · 1 Ground · 2 Background · 3 Decor · Alt / pen button to erase':next==='block'?'Draw '+sketchRole+' rectangles':next==='region'?'Drag around the area to treat':next==='collision'?'Paint collision · hidden in game':next==='mask'?'Erase '+(eraseAll?'all unlocked layers':current()?.asset?'selected image':sketchRole+' masks')+' · Shift+E changes scope':next==='spawn'?'Tap to place Max':next==='stamp'?'Tap to place · Esc to select':'';canvas.style.cursor=['paint','mask','collision'].includes(next)?'none':next==='pan'?'grab':next==='select'?'default':'crosshair';refresh();renderPalette()}
+function setTool(next){if(input?.active())input.cancel();cropping=false;$('#context-menu').hidden=true;$('#block-color').hidden=true;tool=next;updateBrush();brush=next==='stamp'?brush:null;if(next!=='mask')selected=null;$$('[data-tool]').forEach(b=>b.setAttribute('aria-pressed',String(b.dataset.tool===next)));$('#hint').textContent=next==='paint'?'':next==='block'?'Draw '+sketchRole+' rectangles':next==='region'?'Drag around the area to treat':next==='collision'?'Paint collision · hidden in game':next==='mask'?'':next==='spawn'?'Tap to place Max':next==='stamp'?'Tap to place · Esc to select':'';canvas.style.cursor=['paint','mask','collision'].includes(next)?'none':next==='pan'?'grab':next==='select'?'default':'crosshair';refresh();renderPalette()}
 $$('[data-tool]').forEach(b=>b.onclick=()=>setTool(b.dataset.tool));$('#brush-size').oninput=e=>changeBrush(e.target.value);$('#brush-number').onchange=e=>changeBrush(e.target.value);$('#brush-pressure').onchange=e=>{penPressure=e.target.checked;saveViewPrefs()};$('#erase-all').onchange=e=>{eraseAll=e.target.checked;saveViewPrefs();setTool(tool)};
 const imageSources=new Map();
 async function cacheAssets(assets,{guard=()=>true}={}){
@@ -113,7 +114,7 @@ function duplicate(){cancelGesture();const o=current();if(!o||o.locked)return;ch
 function remove(){cancelGesture();if(!current()||current().locked)return;checkpoint();state.objects=state.objects.filter(o=>o.id!==selected);selected=null;refresh()}
 $('#duplicate').onclick=duplicate;$('#delete').onclick=remove;
 async function restore(project,{preserveTool=false}={}){const previousTool=tool;state={...project,assets:project.assets.map(a=>({...a})),objects:project.objects.map(o=>({...o})),spawn:{...project.spawn}};selected=null;regionIds=null;brush=null;await cacheAssets(state.assets);setTool(preserveTool&&['paint','mask','block','collision'].includes(previousTool)?previousTool:state.objects.length?'select':'paint');refresh();renderPalette();showAssets(!$('#assets').hidden&&state.assets.length>0)}
-async function undo(redo=false){if(playing||importing)return;cancelGesture();if(shared?.connected){if(redo)return;try{await shared.queue;await shared.tool('undo_level',{revision:shared.revision})}catch(e){message(e.message)}return}const from=redo?future:history,to=redo?history:future;if(!from.length)return;const before=snapshot(state),target=from.at(-1);importing=true;localRevision++;try{await cacheAssets(target.assets);await restore(target,{preserveTool:true});from.pop();to.push(before);autosave?.changed()}catch(error){message(error.message,6000)}finally{importing=false;refresh()}}
+async function undo(redo=false){if(playing||importing)return;cancelGesture();if(shared?.connected){try{await shared.queue;await shared.tool(redo?'redo_level':'undo_level',{revision:shared.revision})}catch(e){message(e.message)}return}const from=redo?future:history,to=redo?history:future;if(!from.length)return;const before=snapshot(state),target=from.at(-1);importing=true;localRevision++;try{await cacheAssets(target.assets);await restore(target,{preserveTool:true});from.pop();to.push(before);autosave?.changed()}catch(error){message(error.message,6000)}finally{importing=false;refresh()}}
 $('#undo').onclick=()=>undo();
 $('#project-name').onchange=e=>{const name=projectName(e.target.value);if(!name){message('Give the project a name before saving.');return}if(name!==state.name){checkpoint();state.name=name}refresh()};$('#grid').onchange=e=>{grid=Number(e.target.value);saveViewPrefs()};$('#pixel-view').onchange=e=>{pixelView=e.target.checked;saveViewPrefs()};
 function fit(){if(input?.active())input.cancel();camera.rotation=0;const b=bounds(state.objects,state.spawn),pad=width<680?80:65;camera.z=clamp(Math.min((width-2*pad)/Math.max(80,b.w),(height-2*pad)/Math.max(80,b.h)),.25,5);camera.x=b.x+b.w/2-width/(2*camera.z);camera.y=b.y+b.h/2-height/(2*camera.z);refresh()}
@@ -242,40 +243,60 @@ function ensureProjectName(){if(projectName(state.name))return true;$('#project'
 function saveProject(project){if(ensureProjectName())saveProjectFile(project)}
 function syncStatus(text){$('#save-status').textContent=text;projectControls?.status(text)}
 let projectControls=null;
-shared=new SharedLevel({snapshot:()=>snapshot(state),apply:applyAgentProject,busy:projectBusy,
- persist:()=>autosave?.record?.token?autosave.flush():null,localChanges:()=>!!(autosave?.dirty||autosave?.saving),
- beforeConnect:async token=>{if(autosave?.blocked||token&&autosave?.dirty)throw Error('Local changes are kept. Open Projects to save a recovery copy or load the latest version.');if(!token){if(!ensureProjectName())throw Error('Give the project a name before connecting.');await Promise.resolve();await autosave?.flush();if(autosave?.dirty||autosave?.blocked)throw Error('Save the project before connecting. Your local changes are kept.');if(autosave?.record?.token)return{projectToken:autosave.record.token,revision:autosave.record.revision}}},
- accepted:(room,token)=>autosave?.acceptRemote(room,token),connection:()=>{autosave?.watch();projectControls?.refresh()},status:syncStatus,
+shared=new SharedLevel({snapshot:()=>snapshot(state),committedSnapshot:()=>autosave?.record?.project?structuredClone(autosave.record.project):snapshot(state),apply:applyAgentProject,busy:projectBusy,
+ persist:()=>autosave?.record?.token?autosave.flush():null,localChanges:()=>!!(autosave?.record?.token&&(autosave?.dirty||autosave?.saving)),
+ beforeConnect:async token=>{const record=autosave?.record;await Promise.resolve();await autosave?.flush();if(record!==autosave?.record)throw Error('The active project changed.');if(autosave?.blocked||record?.token&&autosave?.dirty)throw Error('Your local work is kept. Cloud saving will retry before reconnecting.');if(record?.token)return token?{}:{projectToken:record.token,revision:record.revision};if(record){record.connectionToken??=createProjectToken();record.connectionProject??=structuredClone(record.project);await autosave.cacheCurrent();if(record!==autosave.record)throw Error('The active project changed.');return{connectionToken:record.connectionToken,project:structuredClone(record.connectionProject),...(token&&record.baseProject?{baseProject:structuredClone(record.baseProject)}:{})}}},
+ accepted:(room,token)=>{if(autosave?.record)delete autosave.record.connectionProject;autosave?.acceptRemote(room,token);const record=autosave?.record;if(record&&!record.token&&projectName(record.project.name))setTimeout(()=>{if(autosave.record===record)void autosave.flush()},0)},connection:()=>{autosave?.watch();projectControls?.refresh();refreshArtworkHandoff()},status:syncStatus,
  setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});
-async function leaveShared(){await shared.queue;shared.detach();window.history?.replaceState(null,'',location.pathname)}
-async function beginProject(project){cancelGesture();numberScrub?.cancel();if(playing)togglePlay();if(typeof location!=='undefined')await leaveShared();history=[];future=[];localRevision++;if(autosave?.ready)await autosave.start(project);else await restore(project);fit()}
+async function leaveShared(){clearTimeout(agentLinkTimer);agentLinkTimer=null;await shared.queue;shared.detach();window.history?.replaceState(null,'',location.pathname)}
+async function beginProject(project){cancelGesture();numberScrub?.cancel();if(playing)togglePlay();if(typeof location!=='undefined')await leaveShared();history=[];future=[];localRevision++;if(autosave?.ready)await autosave.start(project);else await restore(project);fit();scheduleAgentLink()}
 projectControls=installProjectControls({getSave:()=>autosave,getShared:()=>shared,snapshot:()=>snapshot(state),message,icon,
  prepare:()=>{cancelGesture();numberScrub?.cancel();if(playing)togglePlay()},leave:leaveShared,
- start:beginProject,opened:()=>{history=[];future=[];localRevision++;fit();refresh();showAgent()},
- reset:async()=>{shared.detach();history=[];future=[];localRevision++;window.history.replaceState(null,'',location.pathname);await autosave.start({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});fit();refresh();showAgent()}
+ start:beginProject,opened:()=>{history=[];future=[];localRevision++;fit();refresh();showAgent();scheduleAgentLink()},
+ reset:async()=>{clearTimeout(agentLinkTimer);agentLinkTimer=null;shared.detach();history=[];future=[];localRevision++;window.history.replaceState(null,'',location.pathname);await autosave.start({format:'max-level-studio',version:1,name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]});fit();refresh();showAgent();scheduleAgentLink()}
 });
 installChat({
  connectChatGPT:openAgent,
  history:async()=>shared.connected?(await shared.request('/api/rooms/'+shared.token+'/chat')).messages:[],
  send:async message=>{
   if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');
-  if(!shared.connected){if(shared.token)throw Error('Reconnect the agent session first.');await shared.connect();window.history.replaceState(null,'','#room='+shared.token)}
+  if(!shared.connected)await connectAgentLink();
   await shared.queue;
   if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');
   const reply=await shared.request('/api/rooms/'+shared.token+'/chat',{method:'POST',body:JSON.stringify({message,revision:shared.revision,grid,preview:await previewPNG()})});
   await shared.accept(reply.room);return reply;
  }
 });
-function showAgent(){const connected=shared.connected;$('#agent-connected').hidden=!connected;$('#agent-connect').hidden=connected;$('#agent-url').value=connected?shared.url():''}
+function showAgent(){const connected=shared.connected;$('#agent-connected').hidden=!connected;$('#agent-connect').hidden=connected;$('#agent-url').value=connected?shared.url():'';refreshArtworkHandoff()}
+function scheduleAgentLink(delay=0){
+ if(!autosave?.ready||!autosave.record||autosave.blocked||autosave.record.connectionDisabled||shared.connected)return;
+ if(agentLinkRecord!==autosave.record){agentLinkRecord=autosave.record;agentLinkFailures=0;clearTimeout(agentLinkTimer);agentLinkTimer=null}
+ if(agentLinkTimer||agentLinkPromise)return;
+ agentLinkTimer=setTimeout(()=>{agentLinkTimer=null;void connectAgentLink(true)},delay);
+}
+async function connectAgentLink(background=false){
+ if(shared.connected)return shared.url();
+ if(agentLinkPromise){await agentLinkPromise;if(!background&&!shared.connected)return connectAgentLink();return shared.connected?shared.url():undefined}
+ if(background&&projectBusy()){scheduleAgentLink(500);return}
+ const record=autosave?.record;
+ if(!background&&record){delete record.connectionDisabled;await autosave.cacheCurrent()}
+ agentLinkPromise=(async()=>{
+  try{await shared.connect(shared.token||record?.roomToken||undefined);if(record!==autosave?.record)return;if(!shared.connected)throw Error('ChatGPT connection is not ready.');agentLinkFailures=0;showAgent();if(!autosave)window.history.replaceState(null,'','#room='+shared.token);return shared.url()}
+  catch(error){if(!background)throw error;if(record===autosave?.record)syncStatus('ChatGPT link will retry · Local work kept')}
+  finally{agentLinkPromise=null;if(record!==autosave?.record)scheduleAgentLink();else if(background&&!shared.connected)scheduleAgentLink(Math.min(60000,2000*2**Math.min(agentLinkFailures++,5)))}
+ })();return agentLinkPromise;
+}
 function openAgent(){$('#project').hidden=true;showAgent();$('#agent-dialog').showModal()}
 $('#agent-button').onclick=openAgent;$('#close-agent').onclick=()=>$('#agent-dialog').close();
-$('#agent-connect').onclick=async()=>{const button=$('#agent-connect');button.disabled=true;try{if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');if(!shared.connected)await shared.connect();window.history.replaceState(null,'','#room='+shared.token);showAgent();message('Link ready. Add it in ChatGPT.')}catch(error){message(error.message,6000)}finally{button.disabled=false}};
+$('#agent-connect').onclick=async()=>{const button=$('#agent-connect');button.disabled=true;try{if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');await connectAgentLink();showAgent();message('Link ready. Add it in ChatGPT.')}catch(error){message(error.message,6000)}finally{button.disabled=false}};
 async function copyAgentText(text){try{await navigator.clipboard.writeText(text);message('Copied')}catch{$('#agent-url').value=text;$('#agent-url').focus();$('#agent-url').select();message('Select and copy the link')}}
 $('#copy-agent').onclick=()=>copyAgentText(shared.url());$('#copy-room').onclick=()=>copyAgentText(location.origin+'/#room='+shared.token);
-$('#agent-disconnect').onclick=async()=>{try{await shared.disconnect();if(autosave?.record){autosave.record.roomToken=null;await autosave.cacheCurrent();await autosave.pull()}window.history.replaceState(null,'',autosave?.record?.token?'#project='+autosave.record.token:location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};
+$('#agent-disconnect').onclick=async()=>{try{clearTimeout(agentLinkTimer);agentLinkTimer=null;if(autosave?.record){autosave.record.connectionDisabled=true;await autosave.cacheCurrent()}await shared.disconnect();if(autosave?.record){autosave.record.roomToken=null;delete autosave.record.connectionToken;delete autosave.record.connectionProject;await autosave.cacheCurrent();await autosave.pull()}window.history.replaceState(null,'',autosave?.record?.token?'#project='+autosave.record.token:location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};
 async function executeAgent(name,args={}){
  if((gesture||numberScrub?.active()||importing)&&!['get_level','get_asset_image','get_artwork_request','get_asset_artwork_request','inspect_sprite_sheet','simulate_player','get_canvas_preview'].includes(name))throw Error('The user is editing. Retry when the gesture or import finishes.');
- if(shared.connected)return shared.tool(name,args);
+ if(shared.connecting)await shared.connecting;
+ if(shared.connected){const result=await shared.tool(name,name==='get_level'?{mode:'full',...args}:args);return name==='get_level'?{...(result.structuredContent||result),camera:{...camera},selected,playing,importing}:result.content?.some(item=>item.type==='image')?result:result.structuredContent||result}
+ if(['apply_artwork','apply_asset_artwork'].includes(name)&&args.file)throw Error('Connect this project to ChatGPT before applying a generated file.');
  if(name==='inspect_sprite_sheet')return inspectSpriteSheet(snapshot(state),args);
  if(name==='export_sprite_sheet'){const out=await exportProjectSpriteSheet(snapshot(state),args);return{width:out.w,height:out.h,name:out.name,src:out.src}};
  if(['group_sprite_sheet','edit_sprite_sheet','group_workspace_sprites','ungroup_sprite_sheet'].includes(name)){if(args.revision!==localRevision)throw Error('Read the current revision first.');const revision=localRevision,edited=await spriteSheetProject(snapshot(state),name,args);await cacheAssets(edited.project.assets,{guard:()=>revision===localRevision&&!gesture});if(revision!==localRevision||gesture)throw Error('The level changed. Try again.');checkpoint();state=edited.project;renderPalette();refresh();return{revision:localRevision,...edited.details}}
@@ -290,7 +311,7 @@ async function executeAgent(name,args={}){
  if(name==='get_level')return{revision:localRevision,...projectInfo(snapshot(state)),camera:{...camera},selected,playing,importing};
  if(['import_image','slice_spritesheet','create_spritesheet'].includes(name)){if(args.revision!==localRevision)throw Error('Read the current revision first.');const revision=localRevision,edited=await imageProject(snapshot(state),name,args);await cacheAssets(edited.project.assets,{guard:()=>revision===localRevision&&!gesture});if(revision!==localRevision||gesture)throw Error('The level changed while processing. Try again.');checkpoint();await applyAgentProject(edited.project,{remote:false});return{revision:localRevision,...edited.details,content:edited.image?[edited.image]:[]}}
  if(name==='edit_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');const next=editProject(snapshot(state),args.operations);checkpoint();await applyAgentProject(next,{remote:false});return executeAgent('get_level')}
- if(name==='undo_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');if(!history.length)throw Error('Nothing to undo.');await undo();return executeAgent('get_level')}
+ if(name==='undo_level'||name==='redo_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');const redo=name==='redo_level';if(!(redo?future:history).length)throw Error(redo?'Nothing to redo.':'Nothing to undo.');await undo(redo);return executeAgent('get_level')}
  if(name==='get_asset_image'){const a=await getProjectAssetImage(snapshot(state),args);return{content:[{type:'image',mimeType:'image/png',data:a.src.split(',')[1]}]}}
  if(name==='simulate_player')return simulate(snapshot(state),args.route);
  if(name==='get_canvas_preview')return{content:[{type:'image',mimeType:'image/png',data:(await previewPNG()).split(',')[1]}]};
@@ -299,21 +320,24 @@ async function executeAgent(name,args={}){
 }
 function requestedObjects(){return regionIds??(tool==='select'&&current()?[selected]:undefined)}
 function latestArtworkRequest(){return [...(state.artRequests||[])].reverse().find(r=>r.status==='prepared')}
-async function workspaceTool(name,args={}){await shared?.queue;const result=await executeAgent(name,{...args,revision:shared?.connected?shared.revision:localRevision});return result.structuredContent||result}
+async function workspaceTool(name,args={}){await shared?.queue;await autosave?.flush();const result=await executeAgent(name,{...args,revision:shared?.connected?shared.revision:localRevision});return result.structuredContent||result}
 async function mutateWorkspace(fn){cancelGesture();const revision=localRevision,before=snapshot(state),next=structuredClone(before);fn(next);const clean=validateProject(next);await cacheAssets(clean.assets,{guard:()=>revision===localRevision});if(revision!==localRevision)throw Error('The level changed. Try again.');checkpoint(before);state=clean;renderPalette();refresh()}
 async function handoffArtwork(args){
- const result=await workspaceTool('prepare_artwork',{...args,includeImages:false}),id=result.request?.id||result.requestId;
- const request=await getArtworkRequest(snapshot(state),{requestId:id,includeImages:true});
- exportArtworkRequest(snapshot(state),request);
- $('#handoff-note').textContent=shared?.connected?'Paste these instructions in ChatGPT with your Pixel Mill connection. Your masks and active asset references are ready.':'Attach the downloaded ZIP in ChatGPT, then paste these instructions. The ZIP contains your masks and active asset references.';
- $('#handoff-prompt').value=request.instructions+`\n\nUse image generation to make the level artwork. ${shared?.connected?'Read get_artwork_request with requestId "'+id+'" and includeImages:true to obtain the mask and reference images.':'Use the mask, manifest and reference PNGs in the attached ZIP.'} Return one PNG named ${id}.png. ${shared?.connected?'Apply it with apply_artwork, requestId and the complete PNG dataUrl.':'I will import the returned PNG in Pixel Mill.'}`;
- $('#handoff-dialog').showModal();
- message('Masks and references ready for image generation.',5000);
+ if(gesture||numberScrub.active()||importing)throw Error('Finish the current edit first.');
+ if(!shared.connected)await connectAgentLink();
+ await shared.queue;await autosave?.flush();
+ const candidate=await prepareArtwork({...snapshot(state),artRequests:[]},{...args,includeImages:false}),key=request=>JSON.stringify([request.bounds,request.objects,request.assetIds,request.assetHashes,request.metadataHashes,request.prompt]);
+ let pending=[...(state.artRequests||[])].reverse().find(request=>request.status==='prepared'&&key(request)===key(candidate.request));
+ if(!pending){const result=await workspaceTool('prepare_artwork',{...args,includeImages:false});pending=state.artRequests.find(request=>request.id===(result.request?.id||result.requestId))}
+ const request=await getArtworkRequest(snapshot(state),{requestId:pending.id,includeImages:false});handoffRequestId=request.id;
+ refreshArtworkHandoff();
  return request;
 }
-$('#close-handoff').onclick=()=>$('#handoff-dialog').close();
-$('#copy-artwork-prompt').onclick=async()=>{try{await navigator.clipboard.writeText($('#handoff-prompt').value);message('Image generation instructions copied.')}catch{$('#handoff-prompt').focus();$('#handoff-prompt').select();message('Select and copy the instructions.')}};
-$('#import-artwork-return').onclick=()=>{$('#handoff-dialog').close();$('#apply-artwork').click()};
+function refreshArtworkHandoff(){
+ const request=state.artRequests?.find(request=>request.id===handoffRequestId)||state.artRequests?.at(-1),status=$('#artwork-status');status.hidden=!request;if(!request)return;
+ const applied=request.status==='applied',text=applied?'Artwork applied':shared?.connected?'Ready for ChatGPT':'ChatGPT reconnecting';
+ status.textContent=applied?'✓':'✦';status.title=text;status.setAttribute('aria-label',text);status.dataset.state=applied?'applied':'waiting';status.dataset.requestId=request.id;
+}
 async function filePNG(file){
  if(file.size>24*1024*1024)throw Error('Choose a PNG under 24 MB.');
  const bytes=new Uint8Array(await file.arrayBuffer());let binary='';for(let offset=0;offset<bytes.length;offset+=32768)binary+=String.fromCharCode(...bytes.subarray(offset,offset+32768));
@@ -362,7 +386,7 @@ if(typeof location!=='undefined'){
   app.inert=true;
   const loadProject=async()=>{
    app.inert=true;
-   try{await autosave.init({token:project,roomToken:room});document.querySelector('#project-load-error')?.remove();const linked=room||autosave.record?.roomToken;if(linked&&!autosave.dirty&&!autosave.blocked&&!autosave.cloudError){try{await shared.connect(linked);showAgent()}catch(error){shared.detach();message(error.message,6000)}}}
+   try{await autosave.init({token:project,roomToken:room});document.querySelector('#project-load-error')?.remove()}
    catch(error){
     message(error.message,6000);
     if(!autosave.ready){
@@ -372,13 +396,13 @@ if(typeof location!=='undefined'){
       const title=document.createElement('h2');title.id='project-load-title';title.textContent='Could not open this project';
       const text=document.createElement('p');text.textContent='The cloud copy could not be loaded. Your project link is kept. Retry when storage is available, or start a separate local draft.';
       const retry=document.createElement('button');retry.textContent='Retry';retry.onclick=async()=>{retry.disabled=true;try{await loadProject()}finally{retry.disabled=false}};
-      const draft=document.createElement('button');draft.textContent='Start a local draft';draft.onclick=async()=>{await autosave.start(snapshot(state));window.history.replaceState(null,'',location.pathname);panel.remove();app.inert=false};
+      const draft=document.createElement('button');draft.textContent='Start a local draft';draft.onclick=async()=>{await autosave.start(snapshot(state));window.history.replaceState(null,'',location.pathname);panel.remove();app.inert=false;scheduleAgentLink()};
       panel.append(title,text,retry,draft);panel.addEventListener('cancel',event=>event.preventDefault());document.body.append(panel);panel.showModal();
      }
     }
-   }finally{app.inert=!autosave.ready}
+   }finally{app.inert=!autosave.ready;if(autosave.ready)scheduleAgentLink()}
   };
   void loadProject();
-  window.addEventListener('online',()=>void autosave.retry());setInterval(()=>{if(autosave.dirty)void autosave.flush()},15000);
+  window.addEventListener('online',()=>{void autosave.retry();scheduleAgentLink()});setInterval(()=>{if(autosave.dirty)void autosave.flush();scheduleAgentLink()},15000);
  }else if(room)shared.connect(room).then(showAgent).catch(error=>message(error.message,6000));
 }

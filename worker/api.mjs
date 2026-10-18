@@ -1,5 +1,6 @@
 import {designWithAgent,reserveChat} from './chat.mjs';
-import {prepareArtwork,getArtworkRequest,applyArtwork,applyAssetSheet,prepareAssetArtwork,getAssetArtworkRequest,applyAssetArtwork} from '../dist/artwork.mjs';
+import {downloadArtworkFile} from './artwork-file.mjs';
+import {prepareArtwork,getArtworkRequest,assertArtworkRequest,applyArtwork,applyAssetSheet,prepareAssetArtwork,getAssetArtworkRequest,applyAssetArtwork} from '../dist/artwork.mjs';
 import {agentTools,editProject,projectInfo,compactProjectInfo,editSummary,projectDiff,applyDiff,simulate,imageProject,spriteSheetProject,inspectSpriteSheet,exportProjectSpriteSheet,getProjectAssetImage,patchSourceHash} from '../dist/agent.mjs';
 import {assertStoredProject,assertRoomAccess,resolveProject,writeProject,projectEvents} from './project-store.mjs';
 import {projectRoute,commitProjectPatch} from './project-routes.mjs';
@@ -13,11 +14,11 @@ async function keyFor(token){const hash=await crypto.subtle.digest('SHA-256',new
 function publicRoom(room,known=[]){
  if(!Array.isArray(known)||known.length>2000)throw Error('Invalid known asset versions.');
  const versions=new Map(known.filter(pair=>Array.isArray(pair)&&pair.length===2&&typeof pair[0]==='string'&&typeof pair[1]==='string'&&/^[a-f0-9]{64}$/.test(pair[1])));
- return{revision:room.revision,projectToken:room.projectToken||null,roomToken:room.roomToken||null,project:{...room.project,assets:room.project.assets.map(asset=>{const hash=versions.get(asset.id);return hash&&typeof asset.src==='string'&&patchSourceHash(asset.src)===hash?{...asset,src:undefined,sourceHash:hash}:asset})},control:room.control||null,canUndo:!!room.history?.length};
+ return{revision:room.revision,projectToken:room.projectToken||null,roomToken:room.roomToken||null,project:{...room.project,assets:room.project.assets.map(asset=>{const hash=versions.get(asset.id);return hash&&typeof asset.src==='string'&&patchSourceHash(asset.src)===hash?{...asset,src:undefined,sourceHash:hash}:asset})},control:room.control||null,canUndo:!!room.history?.length,canRedo:!!room.future?.length};
 }
 const saveRoom=writeProject;
 function revisionCheck(room,revision){if(!Number.isInteger(revision)||room.revision!==revision)throw Error('Conflict: read get_level again and use its current revision.')}
-function commitRoom(room,next){assertStoredProject(room);room.history??=[];room.historyRevisions??=room.history.map(()=>null);const inverse=projectDiff(next,room.project);room.project=next;room.history.push(inverse);room.historyRevisions.push(room.revision);if(room.history.length>25){room.history.shift();room.historyRevisions.shift()}room.revision++;room.expires=Date.now()+TTL}
+function commitRoom(room,next){assertStoredProject(room);room.history??=[];room.historyRevisions??=room.history.map(()=>null);const inverse=projectDiff(next,room.project);room.project=next;room.history.push(inverse);room.historyRevisions.push(room.revision);if(room.history.length>25){room.history.shift();room.historyRevisions.shift()}room.future=[];room.revision++;room.expires=Date.now()+TTL}
 function editBase(room,revision){
  if(!Number.isInteger(revision)||revision<0||revision>room.revision)revisionCheck(room,revision);
  let project=room.project,current=room.revision;
@@ -33,13 +34,29 @@ function artworkHandoff(request,revision,includeImages=false){
  const info={revision,request:{...manifest,references:references.map(({src,...reference})=>reference)}};
  return{...toolResult(info),...(includeImages?{content:[{type:'text',text:JSON.stringify(info)},...(map?[{type:'image',mimeType:'image/png',data:map.split(',')[1]}]:[]),...references.map(reference=>({type:'image',mimeType:'image/png',data:reference.src.split(',')[1]}))]}:{})};
 }
-async function executeTool(name,args,room,bucket,key,etag,access=()=>{}){
+async function executeTool(name,args,room,bucket,key,etag,access=()=>{},fetcher=fetch){
  if(name==='inspect_sprite_sheet'){const info=await inspectSpriteSheet(room.project,args),image=args.includeImage?await getProjectAssetImage(room.project,{id:args.assetId}):null;return{...toolResult(info),...(image?{content:[{type:'text',text:JSON.stringify(info)},{type:'image',mimeType:'image/png',data:image.src.split(',')[1]}]}:{})}}
  if(name==='export_sprite_sheet'){const {src,w,h,name:filename}=await exportProjectSpriteSheet(room.project,args),info={assetId:args.assetId,name:filename,width:w,height:h};return{...toolResult(info),content:[{type:'text',text:JSON.stringify(info)},{type:'image',mimeType:'image/png',data:src.split(',')[1]}]}}
  if(['group_sprite_sheet','edit_sprite_sheet','group_workspace_sprites','ungroup_sprite_sheet'].includes(name)){revisionCheck(room,args.revision);const edited=await spriteSheetProject(room.project,name,args);commitRoom(room,edited.project);await saveRoom(bucket,key,room,etag);return toolResult({revision:room.revision,...edited.details})}
  if(name==='get_asset_artwork_request')return artworkHandoff(await getAssetArtworkRequest(room.project,{...args,includeImages:!!args.includeImages}),room.revision,!!args.includeImages);
  if(['prepare_asset_artwork','apply_asset_artwork'].includes(name)){revisionCheck(room,args.revision);const edited=await(name==='prepare_asset_artwork'?prepareAssetArtwork(room.project,{...args,includeImages:!!args.includeImages}):applyAssetArtwork(room.project,args));commitRoom(room,edited.project);await saveRoom(bucket,key,room,etag);return edited.request?artworkHandoff(edited.request,room.revision,!!args.includeImages):toolResult({revision:room.revision,...edited.details})}
  if(name==='get_artwork_request')return artworkHandoff(await getArtworkRequest(room.project,{...args,includeImages:!!args.includeImages}),room.revision,!!args.includeImages);
+ if(name==='apply_artwork'&&args.file){
+  if(args.dataUrl||args.assetId)throw Error('Supply exactly one generated file, PNG data URL or existing asset ID.');
+  const receipt=room.artworkFiles?.find(item=>item.requestId===args.requestId);
+  if(receipt){if(receipt.fileId!==args.file.file_id)throw Error('This artwork request already received a different file. Prepare another request.');return toolResult({revision:room.revision,...receipt.result,replayed:true})}
+  if(!Number.isInteger(args.revision)||args.revision<0||args.revision>room.revision)revisionCheck(room,args.revision);
+  await assertArtworkRequest(room.project,args.requestId);
+  const dataUrl=await downloadArtworkFile(args.file,fetcher);
+  for(let attempt=0;attempt<3;attempt++){
+   const fresh=await resolveProject(bucket,key);access(fresh.record);room=fresh.record;
+   const existing=room.artworkFiles?.find(item=>item.requestId===args.requestId);
+   if(existing){if(existing.fileId!==args.file.file_id)throw Error('This artwork request already received a different file. Prepare another request.');return toolResult({revision:room.revision,...existing.result,replayed:true})}
+   const rebased=room.revision!==args.revision,edited=await applyArtwork(room.project,{requestId:args.requestId,dataUrl,...(args.name?{name:args.name}:{})});
+   commitRoom(room,edited.project);room.artworkFiles=[...(room.artworkFiles||[]),{requestId:args.requestId,fileId:args.file.file_id,result:edited.details}].slice(-64);
+   try{await saveRoom(bucket,key,room,fresh.object.etag);return toolResult({revision:room.revision,...edited.details,...(rebased?{rebased:true}:{})})}catch(error){if(!error.message.startsWith('Conflict:')||attempt===2)throw error}
+  }
+ }
  if(['prepare_artwork','apply_artwork','apply_asset_sheet'].includes(name)){
   revisionCheck(room,args.revision);
   const edited=await(name==='prepare_artwork'?prepareArtwork(room.project,{...args,includeImages:!!args.includeImages}):name==='apply_artwork'?applyArtwork(room.project,args):applyAssetSheet(room.project,args));
@@ -64,12 +81,12 @@ async function executeTool(name,args,room,bucket,key,etag,access=()=>{}){
   },access,args.mutationId);
   const info={revision:room.revision,...delta,...(rebased?{rebased:true}:{})};if(args.verify){const objects=new Map(compactProjectInfo(room.project).objects.map(o=>[o.id,o]));info.objects=delta.changedIds.map(id=>objects.get(id)).filter(Boolean)}return toolResult(info);
  }
- if(name==='undo_level'){revisionCheck(room,args.revision);if(!room.history?.length)throw Error('Nothing to undo.');room.project=applyDiff(room.project,room.history.pop());room.historyRevisions?.pop();room.revision++}
+ if(name==='undo_level'||name==='redo_level'){revisionCheck(room,args.revision);const redo=name==='redo_level',stack=redo?room.future:room.history;if(!stack?.length)throw Error(redo?'Nothing to redo.':'Nothing to undo.');const next=applyDiff(room.project,stack.at(-1));if(redo){const future=room.future.slice(0,-1);commitRoom(room,next);room.future=future}else{room.future??=[];room.future.push(projectDiff(next,room.project));room.project=next;room.history.pop();room.historyRevisions?.pop();room.revision++;room.expires=Date.now()+TTL}}
  else if(name==='set_play_mode'){if(typeof args.playing!=='boolean')throw Error('playing must be boolean.');room.control={id:crypto.randomUUID(),playing:args.playing};room.revision++}
  else throw Error('Unknown tool: '+name);
  await saveRoom(bucket,key,room,etag);return toolResult({revision:room.revision,...projectInfo(room.project),control:room.control||null});
 }
-export async function agentFetch(request,env){
+export async function agentFetch(request,env,fetcher=fetch){
  const url=new URL(request.url),path=url.pathname,origin=request.headers.get('origin');if(origin&&origin!==url.origin&&origin!=='https://chatgpt.com')return response({error:'Origin not allowed'},403);
  if(path==='/api/chat/status')return response({enabled:!!env.OPENAI_API_KEY});
  if(!env.BUCKET)return response({error:'Agent sharing is not configured on this host.'},503);
@@ -85,10 +102,10 @@ export async function agentFetch(request,env){
    let rpc;try{rpc=await body(request)}catch{return response({jsonrpc:'2.0',id:null,error:{code:-32700,message:'Parse error'}},400)}
    if(!rpc||Array.isArray(rpc)||rpc.jsonrpc!=='2.0'||typeof rpc.method!=='string')return response({jsonrpc:'2.0',id:rpc?.id??null,error:{code:-32600,message:'Invalid Request'}},400);
    if(rpc.id===undefined)return response(null,202);
-   let result;if(rpc.method==='initialize')result={protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(rpc.params?.protocolVersion)?rpc.params.protocolVersion:'2025-06-18',capabilities:{tools:{listChanged:false}},serverInfo:{name:'pixel-mill',version:'1.6.0'},instructions:'Read the compact level once and batch edits. edit_level safely rebases recent disjoint changes; never retry a conflicting edit blindly. Supply mutationId to retry a lost edit response without duplicates. Use prepare_artwork to hand off the semantic sketch with selected sheets, apply_artwork to map a returned coherent PNG onto original shapes, or apply_asset_sheet to reuse sheets without generating pixels. Request images only for handoff or visual inspection. Tool schemas define parameters. The private URL grants access only to this level. Saved projects and live editor updates share this revision.'};
+   let result;if(rpc.method==='initialize')result={protocolVersion:['2025-03-26','2025-06-18','2025-11-25'].includes(rpc.params?.protocolVersion)?rpc.params.protocolVersion:'2025-06-18',capabilities:{tools:{listChanged:false}},serverInfo:{name:'pixel-mill',version:'1.7.0'},instructions:'Read the compact level once and batch edits. edit_level safely rebases recent disjoint changes; never retry a conflicting edit blindly. Supply mutationId to retry a lost edit response without duplicates. Use prepare_artwork to hand off the semantic sketch with selected sheets, invoke ChatGPT image generation with its map and active reference images, then apply_artwork with the generated file to return it automatically onto original shapes without manual downloads or uploads, or apply_asset_sheet to reuse sheets without generating pixels. The editor queues prepared requests silently; use an existing matching prepared request rather than asking the user to copy prompts or transfer files. Request images only for generation or visual inspection. Tool schemas define parameters. The private URL grants access only to this level. Saved projects and live editor updates share this revision.'};
    else if(rpc.method==='ping')result={};
    else if(rpc.method==='tools/list')result={tools:agentTools};
-   else if(rpc.method==='tools/call'){try{result=await executeTool(rpc.params?.name,rpc.params?.arguments||{},room,env.BUCKET,key,object.etag,fresh=>assertRoomAccess(fresh,token))}catch(error){result=fail(error.message,room.revision)}}
+   else if(rpc.method==='tools/call'){try{result=await executeTool(rpc.params?.name,rpc.params?.arguments||{},room,env.BUCKET,key,object.etag,fresh=>assertRoomAccess(fresh,token),fetcher)}catch(error){result=fail(error.message,room.revision)}}
    else return response({jsonrpc:'2.0',id:rpc.id,error:{code:-32601,message:'Method not found'}});
    return response({jsonrpc:'2.0',id:rpc.id,result});
   }
@@ -108,7 +125,7 @@ export async function agentFetch(request,env){
   if(request.method==='GET'){if(url.searchParams.get('revision')===String(room.revision))return response(null,304);const known=url.searchParams.has('assetVersions')?JSON.parse(url.searchParams.get('assetVersions')):[];return response(publicRoom(room,known))}
   if(request.method==='DELETE'){const next=room.projectToken?{...room,roomToken:null,revision:room.revision+1}:{deleted:true,revision:room.revision+1};await saveRoom(env.BUCKET,key,next,object.etag);await env.BUCKET.delete(key+'/preview');return response({revoked:true})}
   if(request.method==='PATCH'){const value=await body(request);const updated=await commitProjectPatch(env.BUCKET,key,room,object.etag,value.diff,commitRoom,fresh=>assertRoomAccess(fresh,token),value.mutationId);return response(publicRoom(updated,value.knownAssets||[]))}
-  if(request.method==='POST'){const value=await body(request);const result=await executeTool(value.name,value.arguments||{},room,env.BUCKET,key,object.etag,fresh=>assertRoomAccess(fresh,token));return response(result)}
+  if(request.method==='POST'){const value=await body(request);const result=await executeTool(value.name,value.arguments||{},room,env.BUCKET,key,object.etag,fresh=>assertRoomAccess(fresh,token),fetcher);return response(result)}
   return response({error:'Method not allowed'},405);
  }catch(error){return response({error:error.message,...(error.code?{code:error.code}:{})},error.status||(error.message.startsWith('Conflict:')?409:400))}
 }

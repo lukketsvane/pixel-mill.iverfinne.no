@@ -90,12 +90,21 @@ export async function projectRoute(request,env,{body,keyFor,response,publicRoom,
   const value=await body(request);
   if(value.projectToken){
    if(!/^[a-f0-9]{64}$/.test(value.projectToken))throw Error('Invalid project link.');
-   const found=await resolveSavedProject(bucket,keyFor,value.projectToken),room=found.record;
-   requireProjectName(room.project);revisionCheck(room,value.revision);
-   if(room.roomToken&&room.expires>Date.now())return response({token:room.roomToken,...publicRoom(room)});
-   const token=privateToken();await writeProject(bucket,await keyFor(token),{ref:found.key});
-   room.projectToken=value.projectToken;room.roomToken=token;room.revision++;room.expires=Date.now()+PROJECT_TTL;
-   await writeProject(bucket,found.key,room,found.object.etag);return response({token,...publicRoom(room)},201);
+   for(let attempt=0;attempt<3;attempt++){
+    const found=await resolveSavedProject(bucket,keyFor,value.projectToken),room=found.record;
+    requireProjectName(room.project);
+    if(room.roomToken&&room.expires>Date.now())return response({token:room.roomToken,...publicRoom(room)});
+    const token=privateToken(),alias=await keyFor(token);await writeProject(bucket,alias,{ref:found.key});
+    room.projectToken=value.projectToken;room.roomToken=token;room.revision++;room.expires=Date.now()+PROJECT_TTL;
+    try{await writeProject(bucket,found.key,room,found.object.etag);return response({token,...publicRoom(room)},201)}catch(error){if(!error.message.startsWith('Conflict:'))throw error;await bucket.delete(alias);if(attempt===2)throw error}
+   }
+  }
+  if(value.connectionToken){
+   if(typeof value.connectionToken!=='string'||!/^706d763200000001[a-f0-9]{48}$/.test(value.connectionToken))throw Error('Invalid connection identifier.');
+   const token=value.connectionToken,key=await keyFor(token),project=validateProject(value.project);
+   try{const existing=await resolveProject(bucket,key);assertRoomAccess(existing.record,token);return response({token,...publicRoom(existing.record)})}catch(error){if(error.status!==404)throw error}
+   const room={project,revision:0,history:[],expires:Date.now()+PROJECT_TTL};
+   try{await writeProject(bucket,key,room);return response({token,...publicRoom(room)},201)}catch(error){if(!error.message.startsWith('Conflict:'))throw error;const existing=await resolveProject(bucket,key);assertRoomAccess(existing.record,token);return response({token,...publicRoom(existing.record)})}
   }
   // Legacy temporary room links remain supported. Saving one requires a name.
   const project=validateProject(value),token=privateToken(),key=await keyFor(token),room={project,revision:0,history:[],expires:Date.now()+PROJECT_TTL};
