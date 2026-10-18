@@ -12,10 +12,14 @@ async function cloudNetwork(path,options={}){
  }catch(error){if(error.name==='AbortError')throw Object.assign(Error('Cloud saving timed out. Your local work is kept.'),{status:503});throw error}
  finally{clearTimeout(timer)}
 }
+async function uploadTransferPart(token,index,data){
+ const path='/api/transfers/'+token+'/'+index,options={method:'PUT',body:JSON.stringify({data})};
+ for(let attempt=0;;attempt++)try{return await cloudNetwork(path,options)}catch(error){if(attempt===2||![502,503,504].includes(error.status)&&!(error instanceof TypeError))throw error;await new Promise(resolve=>setTimeout(resolve,500*2**attempt))}
+}
 export async function cloudRequest(path,options={}){
  if(typeof options.body==='string'&&new TextEncoder().encode(options.body).length>3*transferChunkBytes){
   const packed=await packTransfer(options.body,createProjectToken());
-  await transferMap(packed.parts,(data,index)=>cloudNetwork('/api/transfers/'+packed.descriptor.token+'/'+index,{method:'PUT',body:JSON.stringify({data})}));
+  await transferMap(packed.parts,(data,index)=>uploadTransferPart(packed.descriptor.token,index,data));
   options={...options,headers:{...options.headers,'Content-Type':transferContentType},body:JSON.stringify(packed.descriptor)};
  }
  const data=await cloudNetwork(path,options);

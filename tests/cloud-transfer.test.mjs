@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {randomFillSync} from 'node:crypto';
 import {cloudRequest} from '../dist/cloud-request.mjs';
 import {createProjectToken} from '../dist/project-state.mjs';
-import {packTransfer,transferContentType,transferHash} from '../dist/cloud-transfer.mjs';
+import {packTransfer,transferChunkBytes,transferContentType,transferHash} from '../dist/cloud-transfer.mjs';
 import {encodePNG,dataURL} from '../dist/png.mjs';
 import {transferFetch} from '../worker/transfer.mjs';
 import {agentFetch} from '../worker/api.mjs';
@@ -79,4 +79,31 @@ test('streaming hosts still verify and reassemble chunked uploads before returni
  }
  const result=await transferFetch(new Request('https://pixel.example/api/projects',{method:'POST',headers:{'Content-Type':transferContentType,Accept:transferContentType+', application/json'},body:JSON.stringify(packed.descriptor)}),bucket,async request=>{commits++;assert.equal(request.headers.get('content-type'),'application/json');assert.equal(await request.text(),text);return new Response(text,{headers:{'Content-Type':'application/json'}})},{streamResponses:true});
  assert.equal(result.status,200);assert.equal(await result.text(),text);assert.equal(commits,1);assert.equal(writes,packed.parts.length);assert.equal(bucket.records.size,0);
+});
+
+test('immutable part uploads retry transient errors and a lost reply with identical capabilities and bytes',async t=>{
+ for(const failure of [502,503,504,'lost-reply','timeout'])await t.test(String(failure),async t=>{
+  const bucket=memoryBucket(),body=JSON.stringify({pixels:'x'.repeat(3*transferChunkBytes+1)}),attempts=[];let commits=0;
+  t.mock.method(globalThis,'fetch',async(path,options={})=>{
+   const request=new Request(new URL(path,'https://pixel.example'),options),dispatch=()=>transferFetch(request,bucket,async request=>{commits++;assert.equal(await request.text(),body);return Response.json({saved:true})},{streamResponses:true});
+   if(options.method==='PUT'&&path.endsWith('/3')){attempts.push({path,body:options.body});if(attempts.length===1){if(typeof failure==='string'){assert.equal((await dispatch()).status,200);throw failure==='lost-reply'?TypeError('Failed to fetch'):new DOMException('The request was aborted.','AbortError')}return Response.json({error:'Temporary transfer failure'},{status:failure})}}
+   return dispatch();
+  });
+  assert.deepEqual(await cloudRequest('/api/projects',{method:'POST',body}),{saved:true});assert.equal(commits,1);assert.equal(attempts.length,2);assert.deepEqual(attempts[1],attempts[0]);assert.equal(bucket.records.size,0);
+ });
+});
+
+test('part upload retries are bounded and reject conflicts and other client errors without committing local work',async t=>{
+ for(const status of [503,409,413,401])await t.test(String(status),async t=>{
+  const bucket=memoryBucket(),body=JSON.stringify({pixels:'x'.repeat(3*transferChunkBytes+1)}),attempts=[],pending=[];let commits=0;
+  t.mock.method(globalThis,'fetch',(path,options={})=>{
+   const work=(async()=>{if(options.method==='PUT'&&path.endsWith('/3')){attempts.push({path,body:options.body});return Response.json({error:'Cloud transfer failed. Your local work is kept.',code:'transfer_unavailable'},{status})}
+   return transferFetch(new Request(new URL(path,'https://pixel.example'),options),bucket,()=>{commits++;return Response.json({saved:true})},{streamResponses:true})})();pending.push(work);return work;
+  });
+  await assert.rejects(()=>cloudRequest('/api/projects',{method:'POST',body}),error=>error.status===status&&/local work is kept/.test(error.message));await Promise.allSettled(pending);assert.equal(commits,0);assert.equal(attempts.length,status===503?3:1);for(const attempt of attempts)assert.deepEqual(attempt,attempts[0]);assert.equal(bucket.records.size,3);assert.equal(JSON.parse(body).pixels.length,3*transferChunkBytes+1);
+ });
+});
+
+test('project commits are not automatically retried by the part upload recovery',async t=>{
+ let calls=0;t.mock.method(globalThis,'fetch',async()=>{calls++;return Response.json({error:'Cloud saving is unavailable. Your local work is kept.'},{status:503})});await assert.rejects(()=>cloudRequest('/api/projects',{method:'POST',body:'{"project":{}}'}),error=>error.status===503);assert.equal(calls,1);
 });
