@@ -64,3 +64,9 @@ test('ChatGPT handoff works without an API key and MCP edits reach the live edit
   await ids.get('agent-disconnect').onclick();assert.equal(ids.get('agent-connected').hidden,true);assert.equal((await fetch(url,{method:'POST',body:'{}'})).status,410);
  }finally{globalThis.fetch=previousFetch;delete globalThis.location;delete window.history}
 });
+
+test('local tools wait for a project file to finish opening before reading its objects',async()=>{
+ let release,finished=false;const contents=new Promise(resolve=>release=resolve),project={format:'max-level-studio',version:1,name:'Newly opened project',spawn:{x:12,y:24},assets:[],objects:[]};
+ ids.get('project-file').files=[{size:200,text:()=>contents}];const opening=ids.get('project-file').onchange({target:ids.get('project-file')}),reading=read().then(result=>{finished=true;return result});await Promise.resolve();assert.equal(finished,false);
+ release(JSON.stringify(project));await opening;const result=await reading;assert.equal(result.name,project.name);assert.deepEqual(result.spawn,project.spawn);assert.equal(result.objects.length,0);
+});

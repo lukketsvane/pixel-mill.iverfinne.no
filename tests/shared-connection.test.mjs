@@ -30,3 +30,11 @@ test('a lost connection response retries the same frozen draft and rebases later
  await assert.rejects(c.shared.connect(),/Response lost/);const drawn=blank();drawn.objects=[{id:'retained-pen-stroke',kind:'solid',x:1,y:2,w:16,h:8}];c.set(drawn);await c.shared.connect();
  assert.equal(attempts,2);assert.equal(c.shared.token,'same-room');assert.deepEqual(c.get(),validateProject(drawn));c.shared.detach();
 });
+
+test('reads and persistence cannot overtake a remote undo while restored pixels are decoding',async()=>{
+ const c=client(),decoding=deferred(),release=deferred(),restored={...blank(),name:'Restored artwork'};let reads=0;
+ c.shared.token='room';c.shared.api.apply=async(next,{guard})=>{decoding.resolve();await release.promise;if(!guard())return false;c.set(next)};
+ c.shared.request=async(path,options={})=>{if(!options.body)return{revision:1,project:restored};const {name}=JSON.parse(options.body);if(name==='get_level'){reads++;assert.equal(c.get().name,'Restored artwork')}return{structuredContent:{revision:1,name:restored.name}}};
+ const undo=c.shared.tool('undo_level',{revision:0});await decoding.promise;c.shared.api.persist=()=>Promise.resolve();const save=c.shared.push(c.get(),c.get()),read=c.shared.tool('get_level');await Promise.resolve();await Promise.resolve();assert.equal(reads,0);
+ release.resolve();await Promise.all([undo,save,read]);assert.equal(reads,1);assert.deepEqual(c.get(),restored);c.shared.detach();
+});

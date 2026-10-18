@@ -56,7 +56,7 @@ export class SharedLevel{
   else this.incoming=room;
  }
  push(before,after){
-  if(this.connected){const persisted=this.api.persist?.();if(persisted){this.queue=Promise.resolve(persisted);return this.queue}}
+  if(this.connected){const persisted=this.api.persist?.();if(persisted){this.queue=Promise.all([this.queue,persisted]).then(()=>{});return this.queue}}
   if(!this.connected)return;const diff=projectDiff(before,after);if(!Object.keys(diff).some(k=>Array.isArray(diff[k])?diff[k].length:true))return;
   const epoch=this.epoch,token=this.token;this.pending++;this.api.status?.('Saving…');
   this.queue=this.queue.then(async()=>{
@@ -74,7 +74,11 @@ export class SharedLevel{
   const versions=projectVersionQuery(this.api.snapshot().assets),room=await this.request('/api/rooms/'+token+'?revision='+this.applied+'&'+versions);
   if(epoch===this.epoch&&guard())return this.accept(room);return true;
  }
- async tool(name,args={}){await this.queue;await this.api.persist?.();if(this.api.localChanges?.())throw Error('Your changes are kept locally. Wait for cloud saving before using this tool.');if(this.paused)throw Error('Reconnect the agent session first.');const epoch=this.epoch,token=this.token;const result=await this.request('/api/rooms/'+token,{method:'POST',body:JSON.stringify({name,arguments:args})});if(epoch!==this.epoch)throw Error('The active project changed.');if(!['get_level','get_asset_image','get_artwork_request','get_asset_artwork_request','inspect_sprite_sheet','simulate_player','get_canvas_preview','export_sprite_sheet'].includes(name)){const versions=projectVersionQuery(this.api.snapshot().assets);const room=await this.request('/api/rooms/'+token+'?'+versions);if(epoch===this.epoch)await this.accept(room)}return result}
+ tool(name,args={}){
+  const epoch=this.epoch,token=this.token,readOnly=['get_level','get_asset_image','get_artwork_request','get_asset_artwork_request','inspect_sprite_sheet','simulate_player','get_canvas_preview','export_sprite_sheet'].includes(name);
+  const result=this.queue.then(async()=>{if(epoch!==this.epoch)throw Error('The active project changed.');await this.api.persist?.();if(this.api.localChanges?.())throw Error('Your changes are kept locally. Wait for cloud saving before using this tool.');if(this.paused)throw Error('Reconnect the agent session first.');const result=await this.request('/api/rooms/'+token,{method:'POST',body:JSON.stringify({name,arguments:args})});if(epoch!==this.epoch)throw Error('The active project changed.');if(!readOnly){const versions=projectVersionQuery(this.api.snapshot().assets);const room=await this.request('/api/rooms/'+token+'?'+versions);if(epoch===this.epoch)await this.accept(room)}return result});
+  if(!readOnly)this.queue=result.catch(()=>{});return result;
+ }
  capture(){if(!this.connected)return;clearTimeout(this.previewTimer);const epoch=this.epoch,token=this.token;this.previewTimer=setTimeout(async()=>{if(epoch!==this.epoch||this.api.busy()||this.pending)return;try{const revision=this.applied,src=await this.api.preview();if(epoch===this.epoch&&revision===this.applied&&src!==this.lastPreviewSource){await this.request('/api/rooms/'+token+'/preview',{method:'POST',body:JSON.stringify({src,revision})});if(epoch===this.epoch){this.lastPreviewSource=src;this.lastPreviewAt=Date.now()}}}catch{}},Math.max(800,(this.lastPreviewAt||0)+3000-Date.now()))}
  async disconnect(){await this.queue;const token=this.token;try{await this.request('/api/rooms/'+token,{method:'DELETE'})}catch(error){if(![404,410].includes(error.status))throw error}this.detach();this.api.changed()}
 }

@@ -109,6 +109,7 @@ test('virtual asset validation rejects missing pixels and cycles; changed source
 test('generated PNG accepts single-source-pixel aspect rounding while keeping native masks exact',async()=>{
  const original=project([shape('floor',0,0,231,81)]),prepared=await prepareArtwork(original,{id:'rounded-output',includeImages:false}),src=await makePNG(2117,743),applied=await applyArtwork(prepared.project,{requestId:prepared.request.id,dataUrl:src});assert.deepEqual(applied.project.objects.map(withoutArt),original.objects);assert.deepEqual(platforms(applied.project.objects),platforms(original.objects));
  await assert.rejects(async()=>applyArtwork(prepared.project,{requestId:prepared.request.id,dataUrl:await makePNG(160,160)}),/PNG|aspect|match/i);
+ const wider=await prepareArtwork(project([shape('floor',0,0,231,92)]),{id:'independent-rounding',includeImages:false});const rounded=await applyArtwork(wider.project,{requestId:wider.request.id,dataUrl:await makePNG(1986,792)});assert.deepEqual(rounded.project.objects.map(withoutArt),wider.project.objects);
 });
 
 test('level reference regrouping and ungrouping retain prepared artwork when rendered pixels are unchanged',async()=>{

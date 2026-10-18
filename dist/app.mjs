@@ -30,7 +30,7 @@ $$('[data-icon]').forEach(el=>icon(el,el.dataset.icon));
 const app=$('#app'),canvas=$('#canvas'),ctx=canvas.getContext('2d',{alpha:false}),pixelBuffer=document.createElement('canvas');let paint=ctx,pixelView=true;
 let state={name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]},camera={x:0,y:0,z:3,rotation:0},width=0,height=0,dpr=1;
 let input=null,playControls=null,shared=null,autosave=null,localRevision=0,workspaces=null,spriteWorkspace=null,handoffRequestId=null;
-let agentLinkTimer=null,agentLinkPromise=null,agentLinkRecord=null,agentLinkFailures=0;
+let agentLinkTimer=null,agentLinkPromise=null,agentLinkRecord=null,agentLinkFailures=0,projectTransition=null;
 let sketchRole='platform',sketchColor='#91e8c1',regionIds=null;
 let cropping=false,opacityBefore=null,numberScrub=null,scrubEdit=null,assetTray=null,assetRows=1,expandedAssetGroup=null;
 let selected=null,tool='select',brush=null,grid=4,gesture=null,playing=false,player=null,colliders=[],editorCamera=null,importing=false;
@@ -122,7 +122,7 @@ $('#fit').onclick=fit;
 function exportBusy(fn){if(importing){message('Finish importing first.');return}return fn()}
 $('#save').onclick=()=>{if(!ensureProjectName())return;return exportBusy(()=>{saveProjectFile(state);void autosave?.flush();$('#project').hidden=true})};
 $('#load').onclick=()=>exportBusy(()=>$('#project-file').click());
-$('#project-file').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;try{const project=await readProject(file);await beginProject(project);$('#project').hidden=true;message('Opened')}catch(error){message(error.message)}};
+$('#project-file').onchange=async e=>{const file=e.target.files[0];e.target.value='';if(!file)return;try{await transitionProject(async()=>replaceProject(await readProject(file)));$('#project').hidden=true;message('Opened')}catch(error){message(error.message)}};
 $('#export').onclick=()=>ensureProjectName()&&exportBusy(async()=>{try{message('Exporting…',0);await exportProject(state,images);$('#project').hidden=true;message('ZIP ready')}catch(error){message(error.message)}});
 $('#figma-button').onclick=()=>{$('#project').hidden=true;$('#figma-dialog').showModal()};$('#close-figma').onclick=()=>$('#figma-dialog').close();
 $('#export-figma').onclick=()=>{if(!ensureProjectName()){$('#figma-dialog').close();return}return exportBusy(async()=>{const button=$('#export-figma');button.disabled=true;try{message('Preparing Figma components…',0);const result=await exportFigmaKit(snapshot(state),images);message(`${result.components} components · ${result.objects} pieces · Figma kit ready`,6000)}catch(error){message(error.message,6000)}finally{button.disabled=false}})};
@@ -249,7 +249,9 @@ shared=new SharedLevel({snapshot:()=>snapshot(state),committedSnapshot:()=>autos
  accepted:(room,token)=>{if(autosave?.record)delete autosave.record.connectionProject;autosave?.acceptRemote(room,token);const record=autosave?.record;if(record&&!record.token&&projectName(record.project.name))setTimeout(()=>{if(autosave.record===record)void autosave.flush()},0)},connection:()=>{autosave?.watch();projectControls?.refresh();refreshArtworkHandoff()},status:syncStatus,
  setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});
 async function leaveShared(){clearTimeout(agentLinkTimer);agentLinkTimer=null;await shared.queue;shared.detach();window.history?.replaceState(null,'',location.pathname)}
-async function beginProject(project){cancelGesture();numberScrub?.cancel();if(playing)togglePlay();if(typeof location!=='undefined')await leaveShared();history=[];future=[];localRevision++;if(autosave?.ready)await autosave.start(project);else await restore(project);fit();scheduleAgentLink()}
+function transitionProject(action){const previous=projectTransition,transition=(previous?previous.catch(()=>{}):Promise.resolve()).then(action);projectTransition=transition;return transition.finally(()=>{if(projectTransition===transition)projectTransition=null})}
+function beginProject(project){return transitionProject(()=>replaceProject(project))}
+async function replaceProject(project){cancelGesture();numberScrub?.cancel();if(playing)togglePlay();if(typeof location!=='undefined')await leaveShared();history=[];future=[];localRevision++;if(autosave?.ready)await autosave.start(project);else await restore(project);fit();scheduleAgentLink()}
 projectControls=installProjectControls({getSave:()=>autosave,getShared:()=>shared,snapshot:()=>snapshot(state),message,icon,
  prepare:()=>{cancelGesture();numberScrub?.cancel();if(playing)togglePlay()},leave:leaveShared,
  start:beginProject,opened:()=>{history=[];future=[];localRevision++;fit();refresh();showAgent();scheduleAgentLink()},
@@ -293,6 +295,7 @@ async function copyAgentText(text){try{await navigator.clipboard.writeText(text)
 $('#copy-agent').onclick=()=>copyAgentText(shared.url());$('#copy-room').onclick=()=>copyAgentText(location.origin+'/#room='+shared.token);
 $('#agent-disconnect').onclick=async()=>{try{clearTimeout(agentLinkTimer);agentLinkTimer=null;if(autosave?.record){autosave.record.connectionDisabled=true;await autosave.cacheCurrent()}await shared.disconnect();if(autosave?.record){autosave.record.roomToken=null;delete autosave.record.connectionToken;delete autosave.record.connectionProject;await autosave.cacheCurrent();await autosave.pull()}window.history.replaceState(null,'',autosave?.record?.token?'#project='+autosave.record.token:location.pathname);showAgent();message('Agent link revoked')}catch(error){message(error.message)}};
 async function executeAgent(name,args={}){
+ if(projectTransition)await projectTransition;
  if((gesture||numberScrub?.active()||importing)&&!['get_level','get_asset_image','get_artwork_request','get_asset_artwork_request','inspect_sprite_sheet','simulate_player','get_canvas_preview'].includes(name))throw Error('The user is editing. Retry when the gesture or import finishes.');
  if(shared.connecting)await shared.connecting;
  if(shared.connected){const result=await shared.tool(name,name==='get_level'?{mode:'full',...args}:args);return name==='get_level'?{...(result.structuredContent||result),camera:{...camera},selected,playing,importing}:result.content?.some(item=>item.type==='image')?result:result.structuredContent||result}
