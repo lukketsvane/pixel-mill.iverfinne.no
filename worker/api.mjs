@@ -67,8 +67,8 @@ async function executeTool(name,args,room,bucket,key,etag,access=()=>{},fetcher=
  if(name==='get_asset_image'){const a=await getProjectAssetImage(room.project,args);return{content:[{type:'text',text:JSON.stringify({id:a.id,name:a.name,width:a.w,height:a.h})},{type:'image',mimeType:'image/png',data:a.src.split(',')[1]}]}}
  if(name==='simulate_player')return toolResult(simulate(room.project,args.route));
  if(name==='get_canvas_preview'){const object=await bucket.get(key+'/preview');if(!object)throw Error('No preview yet. Open the connected editor.');const preview=await object.json();return{content:[{type:'text',text:JSON.stringify({revision:preview.revision,currentRevision:room.revision,capturedAt:preview.capturedAt})},{type:'image',mimeType:'image/png',data:preview.src.split(',')[1]}]}}
- if(['import_image','slice_spritesheet','create_spritesheet'].includes(name)){
-  revisionCheck(room,args.revision);const edited=await imageProject(room.project,name,args);commitRoom(room,edited.project);await saveRoom(bucket,key,room,etag);
+ if(['import_image','slice_spritesheet','create_spritesheet','edit_asset_image'].includes(name)){
+  revisionCheck(room,args.revision);const edited=await imageProject(room.project,name,args);if(edited.details.changed!==false){commitRoom(room,edited.project);await saveRoom(bucket,key,room,etag)}
   const info={revision:room.revision,...edited.details};return{content:[{type:'text',text:JSON.stringify(info)},...(args.includeImage&&edited.image?[edited.image]:[])],structuredContent:info};
  }
  if(name==='edit_level'){

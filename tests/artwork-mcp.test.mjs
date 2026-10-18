@@ -180,3 +180,10 @@ test('file return accepts an older revision when only unrelated objects changed 
  const result=await tool('apply_artwork',{revision:1,requestId:request.id,file});assert.equal(result.isError,undefined);assert.equal(result.structuredContent.rebased,true);assert.equal(result.structuredContent.revision,3);assert.equal(downloads,1);assert.equal((await rawState()).objects.find(o=>o.id==='flower').x,46);
  await tool('undo_level',{revision:3});const undone=await rawState();assert.equal(undone.objects.find(o=>o.id==='flower').x,46);assert.equal(undone.objects.some(o=>o.artwork),false);
 });
+
+test('HTTP local full erase wins concurrent artwork without discarding sources or other styled objects and undoes exactly',async t=>{
+ const {tool,rawState,patch}=await httpRoom(t,await fixture()),prepared=await tool('prepare_artwork',{revision:0,objectIds:['floor','ledge']}),request=prepared.structuredContent.request,beforeArt=await rawState(),local=structuredClone(beforeArt);local.objects=local.objects.filter(object=>object.id!=='floor');const deletion=projectDiff(beforeArt,local);
+ let result=await tool('apply_artwork',{revision:1,requestId:request.id,dataUrl:await png(request.width,request.height)});assert.equal(result.isError,undefined);const styled=await rawState();result=await patch(deletion);assert.equal(result.error,undefined);assert.equal(result.revision,3);let current=await rawState();assert.deepEqual(current.objects,styled.objects.filter(object=>object.id!=='floor'));assert.deepEqual(current.assets,styled.assets);assert.deepEqual(current.artRequests,styled.artRequests);
+ result=await tool('undo_level',{revision:3});assert.equal(result.isError,undefined);assert.deepEqual(await rawState(),styled);
+ result=await tool('edit_level',{revision:4,operations:[{type:'update',id:'floor',changes:{mask:{w:2,h:1,runs:[[0,0,1]]}}}]});assert.equal(result.isError,undefined);current=await rawState();const conflict=await patch(deletion);assert.match(conflict.error,/Conflict: piece changed/);assert.deepEqual(await rawState(),current);
+});

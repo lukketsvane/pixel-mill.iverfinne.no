@@ -66,6 +66,22 @@ test('deletion checks the revision, removes project bytes and cannot be undone b
  assert.deepEqual(Object.keys(JSON.parse(env.BUCKET.data.get(key).text)).sort(),['deleted','recoveryKey','revision']);
 });
 
+test('deleting a stale listed project refreshes its revision and Undo retains the latest cloud edits',async t=>{
+ const {call}=harness(),previous=globalThis.fetch,cache=new Cache(),deletes=[];let state=base();
+ globalThis.fetch=(path,options={})=>{if(options.method==='DELETE')deletes.push(JSON.parse(options.body).revision);return call(path,options.method||'GET',options.body?JSON.parse(options.body):undefined)};t.after(()=>globalThis.fetch=previous);
+ const save=new Autosave({snapshot:()=>structuredClone(state),restore:async p=>state=structuredClone(p),status:()=>{},link:()=>{}},cache);t.after(()=>save.stop());await save.init();save.changed();await save.flush();
+ const id=save.record.id,token=save.record.token,path='/api/projects/'+token,remote=await json(await call(path));await json(await call(path,'PATCH',{diff:projectDiff(remote.project,editProject(remote.project,[{type:'block',id:'background-update',x:0,y:32,width:64,height:16}]))}));
+ await save.remove(id);assert.deepEqual(deletes,[0,1]);assert.equal((await call(path)).status,410);await save.restoreDeleted();await save.load(id);assert.ok(state.objects.some(o=>o.id==='background-update'));assert.equal(save.record.token,token);assert.equal(save.dirty,false);
+});
+
+test('deleting and undoing a project with conflicting local work retains both versions',async t=>{
+ const {call}=harness(),previous=globalThis.fetch,cache=new Cache();let state=base();
+ globalThis.fetch=(path,options={})=>call(path,options.method||'GET',options.body?JSON.parse(options.body):undefined);t.after(()=>globalThis.fetch=previous);
+ const save=new Autosave({snapshot:()=>structuredClone(state),restore:async p=>state=structuredClone(p),status:()=>{},link:()=>{}},cache);t.after(()=>save.stop());await save.init();save.changed();await save.flush();
+ const id=save.record.id,path='/api/projects/'+save.record.token,remote=await json(await call(path));await json(await call(path,'PATCH',{diff:projectDiff(remote.project,{...remote.project,name:'Remote work'})}));state.name='Local work';save.changed();await save.flush();assert.match(save.blocked,/Conflict/);
+ await save.remove(id);assert.equal((await cache.get(id)).project.name,'Local work');assert.equal((await call(path)).status,410);await save.restoreDeleted();await save.load(id);assert.equal(state.name,'Local work');assert.equal(save.dirty,true);assert.match(save.blocked,/Conflict/);assert.equal((await json(await call(path))).project.name,'Remote work');
+});
+
 test('unnamed drafts remain local; offline deletion preserves recovery and successful deletion removes it',async t=>{
  const {call,env}=harness(),oldFetch=globalThis.fetch,cache=new Cache();let state=base('Untitled'),offline=false;
  globalThis.fetch=(path,options={})=>{if(offline)throw Error('offline');return call(path,options.method||'GET',options.body?JSON.parse(options.body):undefined)};t.after(()=>globalThis.fetch=oldFetch);

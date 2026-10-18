@@ -38,3 +38,10 @@ test('reads and persistence cannot overtake a remote undo while restored pixels 
  const undo=c.shared.tool('undo_level',{revision:0});await decoding.promise;c.shared.api.persist=()=>Promise.resolve();const save=c.shared.push(c.get(),c.get()),read=c.shared.tool('get_level');await Promise.resolve();await Promise.resolve();assert.equal(reads,0);
  release.resolve();await Promise.all([undo,save,read]);assert.equal(reads,1);assert.deepEqual(c.get(),restored);c.shared.detach();
 });
+
+test('an image action cannot dispatch after its selected project changes during persistence',async()=>{
+ const c=client(),started=deferred(),release=deferred();let current=true,requests=0;
+ c.shared.token='room';c.shared.api.persist=async()=>{started.resolve();await release.promise};c.shared.request=async()=>{requests++;throw Error('A stale image action must not be sent')};
+ const edit=c.shared.tool('edit_asset_image',{revision:0,assetId:'same-id',action:'segment'},()=>current);await started.promise;current=false;release.resolve();
+ await assert.rejects(edit,/active project changed/);assert.equal(requests,0);c.shared.detach();
+});

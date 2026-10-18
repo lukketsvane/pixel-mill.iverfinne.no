@@ -40,6 +40,7 @@ test('drawing shortcuts distinguish tools, modifiers and text input without hija
  for(const [code,action] of [['KeyB','paint'],['KeyE','erase'],['KeyR','block'],['Digit1','walkable'],['BracketRight','larger'],['Tab','workspace']])assert.equal(resolveShortcut(event(code)),action);
  assert.equal(resolveShortcut(event('KeyZ',{ctrlKey:true})),'undo');assert.equal(resolveShortcut(event('KeyZ',{metaKey:true,shiftKey:true})),'redo');
  assert.equal(resolveShortcut(event('Enter',{ctrlKey:true})),'generate');assert.equal(resolveShortcut(event('Enter',{ctrlKey:true,shiftKey:true})),'applyArtwork');
+ assert.equal(resolveShortcut(event('KeyA',{metaKey:true})),'selectAssets');assert.equal(resolveShortcut(event('KeyB',{ctrlKey:true,shiftKey:true})),'removeAssetBackground');assert.equal(resolveShortcut(event('KeyX',{metaKey:true,shiftKey:true})),'segmentAsset');
  assert.equal(resolveShortcut(event('KeyE',{altKey:true})),null);assert.equal(resolveShortcut(event('KeyB',{ctrlKey:true})),null);
  assert.equal(resolveShortcut(event('Minus',{key:'+'})),'zoomIn');assert.equal(resolveShortcut(event('Minus',{key:'?'})),'commands');assert.equal(resolveShortcut(event('Digit8',{key:'[',ctrlKey:true,altKey:true})),'smaller');
  assert.equal(resolveShortcut(event('KeyB',{repeat:true})),null);assert.equal(resolveShortcut(event('KeyB',{isComposing:true})),null);assert.equal(resolveShortcut(event('KeyB',{target:{closest:()=>({})}})),null);
