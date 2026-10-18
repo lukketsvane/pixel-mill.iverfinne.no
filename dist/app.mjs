@@ -31,6 +31,7 @@ const app=$('#app'),canvas=$('#canvas'),ctx=canvas.getContext('2d',{alpha:false}
 let state={name:'Untitled',spawn:{x:0,y:0},assets:[],objects:[]},camera={x:0,y:0,z:3,rotation:0},width=0,height=0,dpr=1;
 let input=null,playControls=null,shared=null,autosave=null,localRevision=0,workspaces=null,spriteWorkspace=null,handoffRequestId=null;
 let agentLinkTimer=null,agentLinkPromise=null,agentLinkRecord=null,agentLinkFailures=0,projectTransition=null;
+let importCleanupRecord=null,importCleanupTimer=null,importCleanupPromise=null,importCleanupDone=false;
 let sketchRole='platform',sketchColor='#91e8c1',regionIds=null;
 let cropping=false,opacityBefore=null,numberScrub=null,scrubEdit=null,assetTray=null,assetRows=1;
 let selected=null,tool='select',brush=null,grid=4,gesture=null,playing=false,player=null,colliders=[],editorCamera=null,importing=false;
@@ -56,7 +57,7 @@ document.addEventListener('dblclick',e=>{if(!e.target.closest('input,select'))e.
 document.addEventListener('wheel',e=>{if(e.ctrlKey||e.metaKey)e.preventDefault()},{passive:false});
 const current=()=>state.objects.find(o=>o.id===selected);
 function checkpoint(before=snapshot(state)){localRevision++;const record=autosave?.record,epoch=shared?.epoch;queueMicrotask(()=>{if(record!==autosave?.record||epoch!==shared?.epoch)return;autosave?.changed();shared?.push(before,snapshot(state))});history.push(before);if(history.length>40)history.shift();future=[];$('#undo').disabled=false}
-function refresh(keepDimensions=false){const o=current();$('#inspector').hidden=playing||!o||tool==='block'||tool==='region';if(!keepDimensions)$('#dimensions').hidden=true;if(o){$('#piece-name').value=o.name;$('#piece-kind').value=o.kind;$('#piece-w').value=o.w;$('#piece-h').value=o.h;$('#piece-inset').value=o.inset;$('#piece-inset').max=o.h-1;$('#piece-angle').value=Math.round(o.rotation||0);for(const id of ['piece-name','piece-kind','piece-w','piece-h','piece-inset','piece-angle','flip','duplicate','delete'])$('#'+id).disabled=!!o.locked;$('#piece-kind').disabled=!!o.locked||!!o.collisionOnly}if(document.activeElement!==$('#project-name'))$('#project-name').value=projectName(state.name)||'';$('#undo').disabled=shared?.connected?!shared.canUndo:!history.length;$('#coordinates').textContent=`${Math.round(camera.z*100)}%`;if(!adjustBefore)syncColorSliders();workspaces?.refresh();refreshArtworkHandoff()}
+function refresh(keepDimensions=false){const o=current();$('#inspector').hidden=playing||!o||tool==='block'||tool==='region';if(!keepDimensions)$('#dimensions').hidden=true;if(o){$('#piece-name').value=o.name;$('#piece-kind').value=o.kind;$('#piece-w').value=o.w;$('#piece-h').value=o.h;$('#piece-inset').value=o.inset;$('#piece-inset').max=o.h-1;$('#piece-angle').value=Math.round(o.rotation||0);for(const id of ['piece-name','piece-kind','piece-w','piece-h','piece-inset','piece-angle','flip','duplicate','delete'])$('#'+id).disabled=!!o.locked;$('#piece-kind').disabled=!!o.locked||!!o.collisionOnly}if(document.activeElement!==$('#project-name'))$('#project-name').value=projectName(state.name)||'';$('#undo').disabled=shared?.connected?!shared.canUndo:!history.length;$('#coordinates').textContent=`${Math.round(camera.z*100)}%`;if(!adjustBefore)syncColorSliders();workspaces?.refresh();refreshArtworkHandoff();scheduleImportCleanup()}
 function colorTargets(){return colorScope==='all'||!current()?state.objects.filter(o=>!o.collisionOnly&&!o.locked):current().collisionOnly||current().locked?[]:[current()]}
 function syncColorSliders(){const o=colorTargets()[0];for(const key of ['hue','saturation','brightness','black','white'])$('#color-'+key).value=o?.adjust?.[key]??(key==='white'?255:0);$('#color-scope').textContent=colorScope==='all'?'All':'Selected';$('#color-scope').setAttribute('aria-pressed',String(colorScope==='all'));for(const el of $$('#color-toolbar input'))el.disabled=!o}
 $('#color-button').onclick=()=>{colorScope=current()?'selected':'all';$('#color-toolbar').hidden=!$('#color-toolbar').hidden;$('#color-button').setAttribute('aria-pressed',String(!$('#color-toolbar').hidden));syncColorSliders()};
@@ -240,7 +241,7 @@ shared=new SharedLevel({snapshot:()=>snapshot(state),committedSnapshot:()=>autos
  accepted:(room,token)=>{if(autosave?.record)delete autosave.record.connectionProject;autosave?.acceptRemote(room,token);const record=autosave?.record;if(record&&!record.token&&projectName(record.project.name))setTimeout(()=>{if(autosave.record===record)void autosave.flush()},0)},connection:()=>{autosave?.watch();projectControls?.refresh();refreshArtworkHandoff()},status:syncStatus,
  setPlay:value=>{if(value!==playing)togglePlay()},preview:previewPNG,error:text=>message(text,7000),changed:refresh});
 async function leaveShared(){clearTimeout(agentLinkTimer);agentLinkTimer=null;await shared.queue;shared.detach();window.history?.replaceState(null,'',location.pathname)}
-function transitionProject(action){const previous=projectTransition,transition=(previous?previous.catch(()=>{}):Promise.resolve()).then(action);projectTransition=transition;return transition.finally(()=>{if(projectTransition===transition)projectTransition=null})}
+function transitionProject(action){const previous=projectTransition,transition=(previous?previous.catch(()=>{}):Promise.resolve()).then(action);projectTransition=transition;return transition.finally(()=>{if(projectTransition===transition){projectTransition=null;scheduleAgentLink()}})}
 function beginProject(project){return transitionProject(()=>replaceProject(project))}
 async function replaceProject(project){cancelGesture();numberScrub?.cancel();if(playing)togglePlay();if(typeof location!=='undefined')await leaveShared();history=[];future=[];localRevision++;if(autosave?.ready)await autosave.start(project);else await restore(project);fit();scheduleAgentLink()}
 projectControls=installProjectControls({getSave:()=>autosave,getShared:()=>shared,snapshot:()=>snapshot(state),message,icon,
@@ -261,7 +262,28 @@ installChat({
  }
 });
 function showAgent(){const connected=shared.connected;$('#agent-connected').hidden=!connected;$('#agent-connect').hidden=connected;$('#agent-url').value=connected?shared.url():'';refreshArtworkHandoff()}
+function scheduleImportCleanup(delay=600){
+ const record=autosave?.record;if(!autosave?.ready||!record)return false;
+ if(importCleanupRecord!==record){clearTimeout(importCleanupTimer);importCleanupTimer=null;importCleanupRecord=record;importCleanupDone=record.importCleanupVersion===1}
+ if(importCleanupDone)return false;
+ if(!state.assets.length){importCleanupDone=true;record.importCleanupVersion=1;void autosave.cacheCurrent();return false}
+ if(!importCleanupTimer&&!importCleanupPromise&&!projectBusy()&&!playing&&!app.inert&&!projectTransition)importCleanupTimer=setTimeout(()=>{importCleanupTimer=null;importCleanupPromise=cleanExistingImports(record).finally(()=>{importCleanupPromise=null;if(record===autosave?.record&&!importCleanupDone)scheduleImportCleanup(1200);else scheduleAgentLink()})},delay);
+ return true;
+}
+async function cleanExistingImports(record){
+ const revision=localRevision,guard=()=>record===autosave?.record&&autosave.ready&&revision===localRevision&&!projectBusy()&&!playing&&!app.inert&&!projectTransition;
+ if(!guard())return;
+ try{
+  if(shared?.connected)await workspaceTool('clean_imported_images',{},guard);
+  else{
+   const before=snapshot(state),edited=await imageProject(before,'clean_imported_images',{});if(!guard())return;
+   if(edited.details.changed){await cacheAssets(edited.project.assets,{guard});if(!guard())return;checkpoint(before);state=edited.project;refresh();renderPalette();autosave.changed()}
+  }
+  if(record!==autosave?.record)return;importCleanupDone=true;record.importCleanupVersion=1;await autosave.cacheCurrent();
+ }catch(error){if(!guard())return;importCleanupDone=true;message(error.message,6000)}
+}
 function scheduleAgentLink(delay=0){
+ if(scheduleImportCleanup())return;
  if(!autosave?.ready||!autosave.record||autosave.blocked||autosave.record.connectionDisabled||shared.connected)return;
  if(agentLinkRecord!==autosave.record){agentLinkRecord=autosave.record;agentLinkFailures=0;clearTimeout(agentLinkTimer);agentLinkTimer=null}
  if(agentLinkTimer||agentLinkPromise)return;
@@ -305,7 +327,7 @@ async function executeAgent(name,args={},guard=()=>true){
   checkpoint();state=edited.project;refresh();renderPalette();return{revision:localRevision,...edited.details,...(edited.request?{request:edited.request}:{})};
  }
  if(name==='get_level')return{revision:localRevision,...projectInfo(snapshot(state)),camera:{...camera},selected,playing,importing};
- if(['import_image','slice_spritesheet','create_spritesheet','edit_asset_image'].includes(name)){if(args.revision!==localRevision)throw Error('Read the current revision first.');const revision=localRevision,edited=await imageProject(snapshot(state),name,args);await cacheAssets(edited.project.assets,{guard:()=>revision===localRevision&&!gesture&&guard()});if(revision!==localRevision||gesture||!guard())throw Error('The level changed while processing. Try again.');if(edited.details.changed===false)return{revision:localRevision,...edited.details};checkpoint();await applyAgentProject(edited.project,{remote:false});return{revision:localRevision,...edited.details,content:edited.image?[edited.image]:[]}}
+ if(['import_image','slice_spritesheet','create_spritesheet','edit_asset_image','clean_imported_images'].includes(name)){if(args.revision!==localRevision)throw Error('Read the current revision first.');const revision=localRevision,edited=await imageProject(snapshot(state),name,args);await cacheAssets(edited.project.assets,{guard:()=>revision===localRevision&&!gesture&&guard()});if(revision!==localRevision||gesture||!guard())throw Error('The level changed while processing. Try again.');if(edited.details.changed===false)return{revision:localRevision,...edited.details};checkpoint();await applyAgentProject(edited.project,{remote:false});return{revision:localRevision,...edited.details,content:edited.image?[edited.image]:[]}}
  if(name==='edit_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');const next=editProject(snapshot(state),args.operations);checkpoint();await applyAgentProject(next,{remote:false});return executeAgent('get_level')}
  if(name==='undo_level'||name==='redo_level'){if(args.revision!==localRevision)throw Error('Read the current revision first.');const redo=name==='redo_level';if(!(redo?future:history).length)throw Error(redo?'Nothing to redo.':'Nothing to undo.');await undo(redo);return executeAgent('get_level')}
  if(name==='get_asset_image'){const a=await getProjectAssetImage(snapshot(state),args);return{content:[{type:'image',mimeType:'image/png',data:a.src.split(',')[1]}]}}

@@ -28,3 +28,11 @@ export function segmentAssetImage(image,{rect,point}={}){
  if(parts.length>2000)throw Error('The selection contains more than 2,000 separate parts.');
  return parts.map(part=>{const extracted=extractPart(result,part);return{pixels:extracted.data,w:extracted.width,h:extracted.height,x:area.x+part.x,y:area.y+part.y,area:part.area}});
 }
+
+export function cleanSplitAssetImage(image,{bridge=0,remove=true}={}){
+ let transparentBorder=false;const alpha=(x,y)=>image.pixels[(y*image.w+x)*4+3];
+ for(let x=0;x<image.w;x++)if(!alpha(x,0)||!alpha(x,image.h-1))transparentBorder=true;
+ for(let y=0;y<image.h;y++)if(!alpha(0,y)||!alpha(image.w-1,y))transparentBorder=true;
+ const cleaned=transparentBorder||!remove?{pixels:image.pixels,removedPixels:0}:removeAssetBackground(image),found=findParts(cleaned.pixels,image.w,image.h,1,8,bridge),result={data:cleaned.pixels,width:image.w,height:image.h,...found};
+ return{pixels:cleaned.pixels,removedPixels:cleaned.removedPixels,parts:found.parts.map(part=>{const extracted=extractPart(result,part);return{pixels:extracted.data,w:part.w,h:part.h,x:part.x,y:part.y,area:part.area}})};
+}
